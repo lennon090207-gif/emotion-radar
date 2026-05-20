@@ -1,0 +1,27 @@
+[build-system]
+requires = ["setuptools>=68", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "emotion-radar"
+version = "0.1.0"
+description = "Detect fresh emotional hook concepts from the first 1-5s of short-form video"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "Pillow>=10.0",
+    "click>=8.1",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=7.4"]
+
+[project.scripts]
+emotion-radar = "emotion_radar.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["emotion_radar*"]
+exclude = ["tests*", "data*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
