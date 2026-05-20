@@ -235,11 +235,59 @@ failed: ...` or `Pass 3 specificity JSON parse failed: ...`.
 - **Default `--limit 5`** to avoid surprise vision-API cost. Raising the
   limit prints a clear warning but is allowed.
 - **Continues on per-file failure** — one bad clip won't kill the batch.
-- **Batch summary** at the end: analyzed/failed counts, report ids,
-  dominant story flows, viral mechanics per file, failures.
+- **Batch summary** at the end: bucketed counts (Analyzed full / Partial
+  Pass-3 failed / Failed / Skipped), report ids, dominant story flows,
+  viral mechanics per file, failures.
 - **Does NOT auto-run calibration** per file. Seed clips don't have
   analytics, and the Oliver canary only fires on a specific TikTok
   video_id that local files won't match.
+
+#### Layby workflow (Phase 7.2)
+
+When you have a large folder of seed clips and you want to bank a few
+concepts at a time without paying for everything up front, use the
+layby pattern: `--skip-existing` + `--bank-fast`.
+
+```bash
+# Download once.
+gdown --folder "https://drive.google.com/drive/folders/<FOLDER_ID>" \
+  -O data/imports/friend_drive
+
+# Bank 5 fresh clips fast (Pass 1 + Pass 2 only, skip Pass 3 specificity).
+# --skip-existing scans past previously-processed files so --limit counts
+# only NEW work.
+VISION_EVENT_MODEL=google/gemini-2.5-flash HOOK_STRATEGY_MODEL=gpt-4o \
+  python -m emotion_radar analyze-folder data/imports/friend_drive \
+  --limit 5 --skip-existing --bank-fast
+
+# Run it again later — the first 5 are skipped; the next 5 get banked.
+VISION_EVENT_MODEL=google/gemini-2.5-flash HOOK_STRATEGY_MODEL=gpt-4o \
+  python -m emotion_radar analyze-folder data/imports/friend_drive \
+  --limit 5 --skip-existing --bank-fast
+
+# When you find an interesting report, run Pass 3 on it specifically:
+python -m emotion_radar analyze-report <REPORT_ID>
+```
+
+`--bank-fast` is a clearer alias for `--no-specificity`. Both skip the
+Phase-6 specificity-rewrite pass and bank only the Pass 1 + Pass 2
+concept data, which is the cheapest and most reliable mode.
+
+#### Partial save when Pass 3 fails
+
+When the three-pass flow runs and Pass 3 (specificity) fails (JSON
+parse error, model error), Pass 1 + Pass 2 are still saved. The row's
+`raw_analysis.analysis_mode` stays at `"two_pass"`,
+`raw_analysis.specificity_status` becomes `"failed"`, and
+`raw_analysis.specificity_error` records the error. The batch summary
+buckets these as **Partial (Pass 3 failed)**, not Failed — you still
+have a usable story-flow concept bank for that clip.
+
+To retry Pass 3 later on a partial-success report:
+
+```bash
+python -m emotion_radar analyze-report <REPORT_ID>
+```
 
 ### Calibration / regression canary
 

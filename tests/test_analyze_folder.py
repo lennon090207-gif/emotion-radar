@@ -94,7 +94,7 @@ def test_analyze_folder_picks_up_only_supported_files(
     assert result.exit_code == 0, result.output
     # 3 supported files; default limit is 5 so all three are processed.
     assert "Found 3 video file(s)" in result.output
-    assert "analyzing 3" in result.output
+    assert "processing up to 5 new files" in result.output  # Phase 7.2 wording
     # The .avi / .txt names are NOT picked up.
     rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
     names = {r["raw_analysis"]["source_metadata"]["source_filename"] for r in rows}
@@ -113,7 +113,7 @@ def test_analyze_folder_respects_default_limit(
     result = _invoke(tmp_path, "analyze-folder", str(folder))
     assert result.exit_code == 0, result.output
     assert "Found 10 video file(s)" in result.output
-    assert "analyzing 5" in result.output  # default limit
+    assert "processing up to 5 new files" in result.output  # Phase 7.2 wording
     rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
     assert len(rows) == 5
 
@@ -211,9 +211,11 @@ def test_analyze_folder_batch_summary_lists_report_ids_and_flows(
     result = _invoke(tmp_path, "analyze-folder", str(folder))
     assert result.exit_code == 0, result.output
     assert "BATCH SUMMARY" in result.output
-    assert "Analyzed: 2" in result.output
-    assert "Failed:   0" in result.output
-    assert "Report IDs:" in result.output
+    # Phase 7.2: bucketed summary.
+    assert "Analyzed (full):          2" in result.output
+    assert "Partial (Pass 3 failed):  0" in result.output
+    assert "Failed:                   0" in result.output
+    assert "Full-success report IDs:" in result.output
     assert "Dominant story flows:" in result.output
     # Each Pass-2 mock declares the same dominant flow → count = 2.
     assert "public_disrespect_viewer_defense: 2" in result.output
@@ -284,3 +286,251 @@ def test_analyze_folder_processes_files_in_sorted_order(
     middle_pos = result.output.find("middle.mp4")
     zeta_pos = result.output.find("zeta.mp4")
     assert 0 <= alpha_pos < middle_pos < zeta_pos
+
+
+# ============================================================================
+# Phase 7.2: --skip-existing + --bank-fast + partial save + bucketed summary
+# ============================================================================
+
+def test_skip_existing_skips_files_already_processed_by_path(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """First run processes both files. Second run with --skip-existing
+    should skip them both via submitted_url path match."""
+    folder = _make_folder(tmp_path, ["alpha.mp4", "beta.mp4"])
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    # First pass: analyze both.
+    first = _invoke(tmp_path, "analyze-folder", str(folder))
+    assert first.exit_code == 0, first.output
+    assert len(list_reports(tmp_path / "emotion_radar.db", limit=20)) == 2
+
+    # Second pass with --skip-existing.
+    second = _invoke(tmp_path, "analyze-folder", str(folder), "--skip-existing")
+    assert second.exit_code == 0, second.output
+    assert "skip alpha.mp4" in second.output
+    assert "skip beta.mp4" in second.output
+    assert "Skipped (already done):   2" in second.output
+    # No new rows.
+    assert len(list_reports(tmp_path / "emotion_radar.db", limit=20)) == 2
+
+
+def test_skip_existing_filename_fallback(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """If the same filename is processed from a moved location, the
+    filename fallback should still skip it."""
+    # First location, first run.
+    src1 = tmp_path / "drive_v1"
+    src1.mkdir()
+    (src1 / "shared_clip.mp4").write_bytes(b"fake")
+
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    res1 = _invoke(tmp_path, "analyze-folder", str(src1))
+    assert res1.exit_code == 0
+    assert len(list_reports(tmp_path / "emotion_radar.db", limit=20)) == 1
+
+    # Now the "same" clip lives in a different folder; same filename.
+    src2 = tmp_path / "drive_v2"
+    src2.mkdir()
+    (src2 / "shared_clip.mp4").write_bytes(b"fake")
+
+    res2 = _invoke(tmp_path, "analyze-folder", str(src2), "--skip-existing")
+    assert res2.exit_code == 0, res2.output
+    assert "skip shared_clip.mp4" in res2.output
+    # Still only one row in the DB.
+    assert len(list_reports(tmp_path / "emotion_radar.db", limit=20)) == 1
+
+
+def test_skip_existing_limit_counts_processed_not_skipped(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """If the first 3 sorted files already exist, --limit 2 --skip-existing
+    should keep scanning until 2 NEW files are processed."""
+    folder = _make_folder(tmp_path, [f"clip_{i:02d}.mp4" for i in range(8)])
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    # Pre-process the first 3 (sorted: clip_00, clip_01, clip_02).
+    pre = _invoke(tmp_path, "analyze-folder", str(folder), "--limit", "3")
+    assert pre.exit_code == 0
+    assert len(list_reports(tmp_path / "emotion_radar.db", limit=20)) == 3
+
+    # Now ask for 2 NEW files. With --skip-existing this should skip
+    # clip_00..02 and process clip_03 and clip_04.
+    res = _invoke(
+        tmp_path, "analyze-folder", str(folder),
+        "--limit", "2", "--skip-existing",
+    )
+    assert res.exit_code == 0, res.output
+    assert "Skipped (already done):   3" in res.output
+    assert "Analyzed (full):          2" in res.output
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
+    names = {r["raw_analysis"]["source_metadata"]["source_filename"] for r in rows}
+    assert "clip_03.mp4" in names and "clip_04.mp4" in names
+    # clip_05+ should NOT have been processed yet.
+    assert "clip_05.mp4" not in names
+    assert len(rows) == 5
+
+
+def test_partial_save_pass3_failure_does_not_kill_batch(
+    monkeypatch, tmp_path: Path,
+):
+    """Pass 3 failure: row is saved as two_pass with specificity_status
+    'failed' and goes into the partial-success bucket — NOT failed."""
+    folder = _make_folder(tmp_path, ["alpha.mp4", "beta.mp4"])
+
+    class _ApifyMustNotBeCalled:
+        def __init__(self, *a, **kw):
+            raise AssertionError("Apify must not be called")
+
+    monkeypatch.setattr(cli_mod, "ApifyClient", _ApifyMustNotBeCalled)
+
+    def _fake_extract(video_path, out_dir, timestamps):
+        out_dir = Path(out_dir); out_dir.mkdir(parents=True, exist_ok=True)
+        ps = []
+        for ts in timestamps:
+            p = out_dir / f"t{ts:0.2f}.jpg"
+            p.write_bytes(b"\xff\xd8\xff\xe0")
+            ps.append(p)
+        return ps
+
+    def _fake_sheet(frame_paths, timestamps, out_path, **kw):
+        Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+        Path(out_path).write_bytes(b"\xff\xd8\xff\xe0")
+        return out_path
+
+    monkeypatch.setattr(cli_mod, "extract_frames", _fake_extract)
+    monkeypatch.setattr(cli_mod, "build_contact_sheet", _fake_sheet)
+
+    # Pass 1 OK; Pass 2 OK; Pass 3 garbage; repair also garbage.
+    class _MP:
+        name = "mock"
+        def __init__(self, label, image, texts):
+            self.model = label; self._image = image
+            self._texts = list(texts); self._i = 0
+        def analyze_image(self, *a, **kw): return self._image
+        def analyze_text(self, *a, **kw):
+            if self._i < len(self._texts):
+                r = self._texts[self._i]; self._i += 1; return r
+            return self._texts[-1]
+
+    def _fake_build(env, role):
+        if role == "vision_event":
+            return _MP("v", json.dumps(PASS1_OLIVER_GOOD), [""])
+        # Per-file: Pass 2 ok, Pass 3 garbage, repair garbage. ×2 files.
+        return _MP("s", "", [
+            json.dumps(PASS2_OLIVER_GOOD), "pass3 bad", "still bad",
+            json.dumps(PASS2_OLIVER_GOOD), "pass3 bad", "still bad",
+        ])
+
+    monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
+
+    result = _invoke(tmp_path, "analyze-folder", str(folder))
+    assert result.exit_code == 0, result.output
+    # Bucketed counts: both files are partial success.
+    assert "Analyzed (full):          0" in result.output
+    assert "Partial (Pass 3 failed):  2" in result.output
+    assert "Failed:                   0" in result.output
+    assert "Partial-success report IDs" in result.output  # full header includes "(Pass 1+2 banked, Pass 3 failed)"
+
+    # Each row preserves Pass 1 + Pass 2 and is annotated as partial.
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
+    assert len(rows) == 2
+    for r in rows:
+        raw = r["raw_analysis"]
+        assert raw["analysis_mode"] == "two_pass"
+        assert raw["specificity_status"] == "failed"
+        assert "Pass 3 specificity JSON parse failed" in raw["specificity_error"]
+        assert raw["hook_strategy_pass"]["dominant_story_flow"] == "public_disrespect_viewer_defense"
+
+
+def test_bank_fast_is_equivalent_to_no_specificity(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """--bank-fast should produce a two_pass row, identical in shape to
+    what --no-specificity produces."""
+    folder = _make_folder(tmp_path, ["alpha.mp4"])
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    result = _invoke(tmp_path, "analyze-folder", str(folder), "--bank-fast")
+    assert result.exit_code == 0, result.output
+    assert "Pass 3 (specificity)" not in result.output  # never ran
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
+    assert len(rows) == 1
+    raw = rows[0]["raw_analysis"]
+    assert raw["analysis_mode"] == "two_pass"
+    # No specificity_status because Pass 3 was intentionally skipped.
+    assert "specificity_status" not in raw
+    # Counts as a full success (the user chose to bank, not a failure).
+    assert "Analyzed (full):          1" in result.output
+    assert "Partial (Pass 3 failed):  0" in result.output
+
+
+def test_bank_fast_and_no_specificity_both_accepted_and_compose(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Passing both flags must not error — they OR together."""
+    folder = _make_folder(tmp_path, ["alpha.mp4"])
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    result = _invoke(
+        tmp_path, "analyze-folder", str(folder),
+        "--no-specificity", "--bank-fast",
+    )
+    assert result.exit_code == 0, result.output
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
+    assert rows[0]["raw_analysis"]["analysis_mode"] == "two_pass"
+
+
+def test_layby_workflow_skip_existing_plus_bank_fast(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """End-to-end Phase 7.2 layby pattern: bank a few new clips fast,
+    rerun safely with --skip-existing and bank a few more."""
+    folder = _make_folder(tmp_path, [f"clip_{i:02d}.mp4" for i in range(6)])
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    # First layby batch: 2 new, bank-fast.
+    r1 = _invoke(
+        tmp_path, "analyze-folder", str(folder),
+        "--limit", "2", "--skip-existing", "--bank-fast",
+    )
+    assert r1.exit_code == 0, r1.output
+    assert "Analyzed (full):          2" in r1.output
+    db = tmp_path / "emotion_radar.db"
+    assert len(list_reports(db, limit=20)) == 2
+
+    # Second layby batch: another 2 new, bank-fast. The first two are skipped.
+    r2 = _invoke(
+        tmp_path, "analyze-folder", str(folder),
+        "--limit", "2", "--skip-existing", "--bank-fast",
+    )
+    assert r2.exit_code == 0, r2.output
+    assert "Skipped (already done):   2" in r2.output
+    assert "Analyzed (full):          2" in r2.output
+    rows = list_reports(db, limit=20)
+    assert len(rows) == 4
+    # All four are two_pass; no specificity_status because bank-fast.
+    for r in rows:
+        raw = r["raw_analysis"]
+        assert raw["analysis_mode"] == "two_pass"
+        assert "specificity_status" not in raw

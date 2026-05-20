@@ -449,10 +449,12 @@ def test_pass2_parse_failure_labeled(
     assert "Pass 2 hook strategy JSON parse failed" in result.output
 
 
-def test_pass3_parse_failure_labeled(
+def test_pass3_parse_failure_preserves_pass1_pass2_concept_bank(
     mock_local_infrastructure, monkeypatch, tmp_path: Path,
 ):
-    """Pass 1 + Pass 2 succeed, Pass 3 fails → error says Pass 3."""
+    """Phase 7.2: Pass 3 failure does NOT crash the run anymore.
+    Pass 1 + Pass 2 are saved as two_pass, and raw_analysis is
+    annotated with specificity_status='failed'."""
     video = _make_fake_video(tmp_path / "videos", "seed_clip.mp4")
 
     class _MP:
@@ -469,7 +471,7 @@ def test_pass3_parse_failure_labeled(
     def _fake_build(env, role):
         if role == "vision_event":
             return _MP("v", json.dumps(PASS1_OLIVER_GOOD), [""])
-        # Pass 2 fine; Pass 3 garbage; repair fails.
+        # Pass 2 fine; Pass 3 garbage; repair fails too.
         return _MP("s", "", [
             json.dumps(PASS2_OLIVER_GOOD),
             "pass 3 garbage",
@@ -479,8 +481,23 @@ def test_pass3_parse_failure_labeled(
     monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
 
     result = _invoke(tmp_path, "analyze-file", str(video), "--skip-evaluation")
-    assert result.exit_code != 0
-    assert "Pass 3 specificity JSON parse failed" in result.output
+    # Partial save: exit code 0, with a clear warning.
+    assert result.exit_code == 0, result.output
+    assert "Pass 3 (specificity) failed" in result.output
+    assert "Pass 3 specificity JSON parse failed" in result.output  # wrapped error
+    assert "concept bank preserved" in result.output
+
+    # The row is saved as two_pass with specificity_status='failed'.
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=10)
+    assert len(rows) == 1
+    raw = rows[0]["raw_analysis"]
+    assert raw["analysis_mode"] == "two_pass"
+    assert raw["specificity_status"] == "failed"
+    assert "Pass 3 specificity JSON parse failed" in raw["specificity_error"]
+    # Pass 2 fields ARE present in the row.
+    assert raw["hook_strategy_pass"]["dominant_story_flow"] == "public_disrespect_viewer_defense"
+    # source_metadata survives the partial save.
+    assert raw["source_metadata"]["source_filename"] == "seed_clip.mp4"
 
 
 def test_slugify_filename_collapses_specials():

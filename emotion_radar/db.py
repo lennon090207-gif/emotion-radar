@@ -268,6 +268,19 @@ def get_report(db_path: Path | str, report_id: str) -> dict[str, Any] | None:
         return _row_to_report(row) if row else None
 
 
+def list_seed_clip_reports(db_path: Path | str) -> list[dict[str, Any]]:
+    """Phase 7.2: return all reports with platform='seed_clip', newest
+    first. Used by analyze-folder --skip-existing to look up which
+    local-file paths/filenames have already been processed."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM reports WHERE platform = 'seed_clip' "
+            "ORDER BY created_at DESC"
+        )
+        return [_row_to_report(r) for r in cur.fetchall()]
+
+
 # ============================================================================
 # Phase 6: concept_feedback CRUD + taste summary
 # ============================================================================

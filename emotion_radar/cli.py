@@ -51,6 +51,7 @@ from .db import (
     insert_report,
     list_feedback,
     list_reports,
+    list_seed_clip_reports,
     update_report_analysis,
 )
 from .evaluator import (
@@ -498,8 +499,15 @@ def _run_three_pass_and_update(
     data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Default flow: Pass 1 + Pass 2 + Pass 3 (specificity rewrite).
-    Pass 3 is conditioned on the user's stored taste profile if any
-    feedback rows exist; otherwise the profile is omitted."""
+
+    Phase 7.2 partial-save behavior: after Pass 1 + Pass 2 succeed, the
+    two-pass result is written to the DB IMMEDIATELY. Pass 3 is then
+    attempted; if it raises (parse error or provider error), the
+    two-pass concept bank stays saved with raw_analysis.specificity_status
+    set to 'failed' and raw_analysis.specificity_error set to the error
+    message. The function returns the (possibly partial) fields dict
+    without raising in that case. Pass 1 / Pass 2 failures still raise
+    (no useful concept data to save)."""
     env = load_env()
     try:
         vision_provider, strategy_provider = _build_pass_providers(env)
@@ -520,28 +528,64 @@ def _run_three_pass_and_update(
         data_dir or Path("data"), report["id"], raw_output_on_parse_error, num_passes=3,
     )
 
+    # --- Pass 1 + Pass 2 (failures here mean no usable concept data) ---
+    sp = strategy_provider
     try:
-        pass1, pass2, pass3 = analysis_mod.analyze_three_pass(
-            sheet_path, report, vision_provider, strategy_provider,
-            taste_profile=taste,
-            debug_pass1_path=debug_p1,
-            debug_pass2_path=debug_p2,
-            debug_pass3_path=debug_p3,
+        pass1 = analysis_mod.extract_visual_event(
+            sheet_path, report, vision_provider, repair_provider=sp,
+            debug_save_path=debug_p1,
+        )
+        pass2 = analysis_mod.generate_hook_strategy(
+            report, pass1, sp, repair_provider=sp,
+            debug_save_path=debug_p2,
         )
     except VisionProviderError as e:
         raise click.ClickException(f"Vision provider failed: {e}") from e
     except ValueError as e:
         raise click.ClickException(f"Could not parse model output: {e}") from e
 
-    fields = _fields_from_result(
-        analysis_mod.build_three_pass_analysis_result(pass1, pass2, pass3)
+    # --- Save the two-pass intermediate IMMEDIATELY ---
+    # This is the concept-bank guarantee: Pass 3 failure won't lose Pass 1+2.
+    two_pass_fields = _fields_from_result(
+        analysis_mod.build_two_pass_analysis_result(pass1, pass2)
     )
-    _carry_source_metadata(report, fields)
-    if not update_report_analysis(db_path, report["id"], fields):
+    _carry_source_metadata(report, two_pass_fields)
+    if not update_report_analysis(db_path, report["id"], two_pass_fields):
         raise click.ClickException(
             f"DB update failed for report {report['id']} (row not found?)."
         )
-    return fields
+
+    # --- Pass 3 (best-effort; failure preserves the two-pass save) ---
+    try:
+        pass3 = analysis_mod.run_specificity_pass(
+            pass1, pass2, sp, taste_profile=taste, repair_provider=sp,
+            debug_save_path=debug_p3,
+        )
+    except (ValueError, VisionProviderError) as e:
+        click.echo(f"\n! Pass 3 (specificity) failed: {e}", err=True)
+        click.echo(
+            "  Pass 1 + Pass 2 are saved; concept bank preserved as two_pass.",
+            err=True,
+        )
+        partial_raw = dict(two_pass_fields["raw_analysis"])
+        partial_raw["specificity_status"] = "failed"
+        partial_raw["specificity_error"] = str(e)
+        update_report_analysis(
+            db_path, report["id"], {"raw_analysis": partial_raw},
+        )
+        two_pass_fields["raw_analysis"] = partial_raw
+        return two_pass_fields
+
+    # --- Pass 3 succeeded: upgrade to three-pass ---
+    three_pass_fields = _fields_from_result(
+        analysis_mod.build_three_pass_analysis_result(pass1, pass2, pass3)
+    )
+    _carry_source_metadata(report, three_pass_fields)
+    if not update_report_analysis(db_path, report["id"], three_pass_fields):
+        raise click.ClickException(
+            f"DB update failed for report {report['id']} (row not found?)."
+        )
+    return three_pass_fields
 
 
 @cli.command("analyze-report")
@@ -980,6 +1024,63 @@ def _local_seed_report_stub(video_path: Path) -> dict[str, Any]:
     }
 
 
+def _seed_clip_already_processed(
+    db_path: Path,
+    video_path: Path,
+) -> dict[str, Any] | None:
+    """Phase 7.2: look up an existing seed_clip report that covers
+    this local file. Returns the row, or None.
+
+    Matching order (strictest first):
+      1. exact match on submitted_url (file URI of the resolved path),
+      2. exact match on raw_analysis.source_metadata.original_local_path,
+      3. fallback: match on source_filename only (handles relocated
+         folders so a moved file isn't reanalyzed)."""
+    target_path = video_path.resolve()
+    target_uri = target_path.as_uri()
+    target_path_str = str(target_path)
+    target_filename = target_path.name
+    for row in list_seed_clip_reports(db_path):
+        if row.get("submitted_url") == target_uri:
+            return row
+        raw = row.get("raw_analysis") or {}
+        meta = (raw.get("source_metadata") or {}) if isinstance(raw, dict) else {}
+        if meta.get("original_local_path") == target_path_str:
+            return row
+    # Filename-only fallback in a second pass — strictest wins.
+    for row in list_seed_clip_reports(db_path):
+        raw = row.get("raw_analysis") or {}
+        meta = (raw.get("source_metadata") or {}) if isinstance(raw, dict) else {}
+        if meta.get("source_filename") == target_filename:
+            return row
+    return None
+
+
+def _classify_report_status(row: dict[str, Any] | None) -> str:
+    """Phase 7.2: bucket a seed-clip report by completion state.
+
+    Returns one of:
+      - "full"     three-pass succeeded, OR two-pass intentional
+                   (--no-specificity / --bank-fast) with no error.
+      - "partial"  two-pass saved, Pass 3 attempted and failed.
+      - "failed"   error column set; no usable concept data.
+      - "stub"     no analysis ran (defensive fallback).
+    """
+    if not row:
+        return "stub"
+    if row.get("error"):
+        return "failed"
+    raw = row.get("raw_analysis") or {}
+    if not isinstance(raw, dict):
+        return "stub"
+    if raw.get("specificity_status") == "failed":
+        return "partial"
+    mode = raw.get("analysis_mode")
+    if mode in ("three_pass", "two_pass"):
+        return "full"
+    return "stub"
+
+
 def _ingest_local_video(
     paths,
     video_path: Path,
@@ -1116,21 +1217,41 @@ def _run_vision_phase_for_report(
 
 def _print_batch_summary(
     db_path: Path,
-    report_ids: list[str],
-    failures: list[tuple[str, str]],
+    full_success: list[str],
+    partial_success: list[str] | None = None,
+    failures: list[tuple[str, str]] | None = None,
+    skipped: list[Path] | None = None,
 ) -> None:
+    """Phase 7.2: buckets the batch outcome into Analyzed (full),
+    Partial (Pass 3 failed but Pass 1+2 banked), Failed (no concept
+    data), and Skipped (already processed under --skip-existing)."""
+    partial_success = partial_success or []
+    failures = failures or []
+    skipped = skipped or []
+    all_concept_ids = list(full_success) + list(partial_success)
+
     click.echo("\n" + ("=" * 60))
     click.echo("BATCH SUMMARY")
     click.echo("=" * 60)
-    click.echo(f"  Analyzed: {len(report_ids)}")
-    click.echo(f"  Failed:   {len(failures)}")
-    if report_ids:
-        click.echo("\n  Report IDs:")
-        for rid in report_ids:
+    click.echo(f"  Analyzed (full):          {len(full_success)}")
+    click.echo(f"  Partial (Pass 3 failed):  {len(partial_success)}")
+    click.echo(f"  Failed:                   {len(failures)}")
+    if skipped:
+        click.echo(f"  Skipped (already done):   {len(skipped)}")
+
+    if full_success:
+        click.echo("\n  Full-success report IDs:")
+        for rid in full_success:
             click.echo(f"    - {rid}")
+    if partial_success:
+        click.echo("\n  Partial-success report IDs (Pass 1+2 banked, Pass 3 failed):")
+        for rid in partial_success:
+            click.echo(f"    - {rid}")
+
+    if all_concept_ids:
         flow_counts: dict[str, int] = {}
         mechanics: list[tuple[str, str]] = []
-        for rid in report_ids:
+        for rid in all_concept_ids:
             row = get_report(db_path, rid)
             if not row:
                 continue
@@ -1151,6 +1272,14 @@ def _print_batch_summary(
             click.echo("\n  Viral mechanics:")
             for rid, mech in mechanics:
                 click.echo(f"    [{rid}] {mech}")
+
+    if skipped:
+        click.echo("\n  Skipped files:")
+        for sk in skipped[:20]:
+            click.echo(f"    - {sk.name}")
+        if len(skipped) > 20:
+            click.echo(f"    ... and {len(skipped) - 20} more")
+
     if failures:
         click.echo("\n  Failures:")
         for path, err in failures:
@@ -1167,6 +1296,9 @@ def _print_batch_summary(
               help="Skip the vision passes entirely; produce only the infrastructure report stub.")
 @click.option("--no-specificity", is_flag=True, default=False,
               help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
+@click.option("--bank-fast", is_flag=True, default=False,
+              help="Alias for --no-specificity. Bank Pass 1 + Pass 2 concept data only; "
+                   "fastest / cheapest mode, useful for batch seed-clip processing.")
 @click.option("--skip-evaluation", is_flag=True, default=False,
               help="Skip the calibration check, even for known video ids.")
 @click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
@@ -1181,6 +1313,7 @@ def analyze_file_cmd(
     dry_run_vision: bool,
     no_vision: bool,
     no_specificity: bool,
+    bank_fast: bool,
     skip_evaluation: bool,
     expected_path: str | None,
     raw_output_on_parse_error: bool,
@@ -1188,6 +1321,7 @@ def analyze_file_cmd(
     """Analyze ONE local video file with the three-pass pipeline. No
     Apify. Used for Drive seed clips and other local sources."""
     paths = ctx.obj["paths"]
+    no_specificity = no_specificity or bank_fast
     video_path = Path(path)
     if video_path.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
         raise click.ClickException(
@@ -1215,15 +1349,22 @@ def analyze_file_cmd(
 @cli.command("analyze-folder")
 @click.argument("folder", type=click.Path(exists=True, file_okay=False))
 @click.option("--limit", default=DEFAULT_FOLDER_LIMIT, show_default=True, type=int,
-              help=f"Max files to analyze. Default {DEFAULT_FOLDER_LIMIT}; raising it prints a cost warning.")
+              help=f"Max files to PROCESS (skipped files don't count). Default {DEFAULT_FOLDER_LIMIT}.")
 @click.option("--recursive", is_flag=True, default=False,
               help="Walk subdirectories. Default: only the immediate folder.")
+@click.option("--skip-existing", is_flag=True, default=False,
+              help="Skip files that already have a seed_clip report (by path or filename). "
+                   "Limit applies to files actually processed, not skipped ones — so "
+                   "--limit 5 --skip-existing keeps scanning until 5 NEW files are processed.")
 @click.option("--keep-temp", is_flag=True, default=False,
               help="Keep extracted frames for debugging.")
 @click.option("--no-vision", is_flag=True, default=False,
               help="Skip the vision passes entirely; produce only stubs.")
 @click.option("--no-specificity", is_flag=True, default=False,
               help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
+@click.option("--bank-fast", is_flag=True, default=False,
+              help="Alias for --no-specificity. Bank Pass 1 + Pass 2 concept data only; "
+                   "fastest / cheapest mode for batch seed-clip processing.")
 @click.option("--raw-output-on-parse-error", is_flag=True, default=False,
               help="On parse failure, save the raw model output to data/debug/model_outputs/ for inspection.")
 @click.pass_context
@@ -1232,16 +1373,20 @@ def analyze_folder_cmd(
     folder: str,
     limit: int,
     recursive: bool,
+    skip_existing: bool,
     keep_temp: bool,
     no_vision: bool,
     no_specificity: bool,
+    bank_fast: bool,
     raw_output_on_parse_error: bool,
 ) -> None:
-    """Analyze multiple local video files (Drive seed clips) in a folder.
-    Sorted by filename for deterministic order. Continues on per-file
-    failure and prints a batch summary at the end. Does NOT auto-run
-    calibration per file (seed clips have no analytics)."""
+    """Analyze local video files (Drive seed clips) in a folder. Sorted
+    by filename for deterministic order. Continues on per-file failure.
+    Phase 7.2: --skip-existing scans past already-processed files so
+    --limit counts NEW files; partial-save means a Pass-3 failure still
+    banks Pass 1 + Pass 2 concept data."""
     paths = ctx.obj["paths"]
+    no_specificity = no_specificity or bank_fast
     folder_path = Path(folder)
     files = _find_video_files(folder_path, recursive=recursive)
     if not files:
@@ -1257,16 +1402,37 @@ def analyze_folder_cmd(
             f"calls may incur cost. Press Ctrl+C now if this is unintended."
         )
 
-    selected = files[:limit]
+    # Phase 7.2: walk all files in sorted order and stop when we hit
+    # `limit` processed (not skipped) files. With --skip-existing off,
+    # this collapses to the previous behavior (selected = files[:limit]).
+    full_success: list[str] = []
+    partial_success: list[str] = []
+    failures: list[tuple[str, str]] = []
+    skipped: list[Path] = []
+
     click.echo(
         f"Found {len(files)} video file(s) in {folder_path}; "
-        f"analyzing {len(selected)} (sorted by filename)."
+        f"processing up to {limit} new files (sorted by filename)"
+        + (" — --skip-existing on" if skip_existing else "")
+        + "."
     )
 
-    report_ids: list[str] = []
-    failures: list[tuple[str, str]] = []
-    for i, video_path in enumerate(selected, start=1):
-        click.echo(f"\n[{i}/{len(selected)}] {video_path.name}")
+    processed_count = 0
+    for video_path in files:
+        if processed_count >= limit:
+            break
+        if skip_existing:
+            existing = _seed_clip_already_processed(paths.db_path, video_path)
+            if existing is not None:
+                skipped.append(video_path)
+                click.echo(
+                    f"  - skip {video_path.name} "
+                    f"(already processed as report {existing.get('id')})"
+                )
+                continue
+
+        processed_count += 1
+        click.echo(f"\n[{processed_count}/{limit}] {video_path.name}")
         try:
             report_id = _ingest_local_video(paths, video_path, keep_temp=keep_temp)
             click.echo(f"  report id: {report_id}")
@@ -1284,7 +1450,15 @@ def analyze_folder_cmd(
                 auto_fixture_lookup=False,
                 raw_output_on_parse_error=raw_output_on_parse_error,
             )
-            report_ids.append(report_id)
+            # Classify by reloading the row's final state.
+            row = get_report(paths.db_path, report_id)
+            status = _classify_report_status(row)
+            if status == "partial":
+                partial_success.append(report_id)
+            elif status == "failed":
+                failures.append((str(video_path), row.get("error") or "unknown error"))
+            else:
+                full_success.append(report_id)
         except click.ClickException as e:
             failures.append((str(video_path), e.message))
             click.echo(f"  ! failed: {e.message}", err=True)
@@ -1292,7 +1466,13 @@ def analyze_folder_cmd(
             failures.append((str(video_path), f"{type(e).__name__}: {e}"))
             click.echo(f"  ! failed: {type(e).__name__}: {e}", err=True)
 
-    _print_batch_summary(paths.db_path, report_ids, failures)
+    _print_batch_summary(
+        paths.db_path,
+        full_success=full_success,
+        partial_success=partial_success,
+        failures=failures,
+        skipped=skipped,
+    )
 
 
 @cli.command("analyze-link")
