@@ -140,7 +140,7 @@ python -m emotion_radar cleanup-temp
 | Pass | Role | Input | Output |
 |------|------|-------|--------|
 | 1 — Visual Event Extractor | Vision | The contact sheet image | Literal, chronological frame observations + physical action + conflict type + confidence. NO scoring, NO hook ideas. |
-| 2 — Hook Strategist | Text-only | Pass 1's JSON + video metadata | Emotional mechanic, viewer role, scores, and exactly 6 hook mutations (2 safe / 3 fresh / 1 big_swing) inside the user's target world. |
+| 2 — Hook Strategist | Text-only | Pass 1's JSON + video metadata | Viral mechanic, scroll-stop reason, viewer role, comment/share triggers, cooked elements, virality scores, and exactly 8 **creative hook concepts** (2 same_mechanic / 3 adjacent_leap / 2 big_swing / 1 wildcard). The product is secondary — the concepts mutate the emotional situation, not the object. |
 
 Why two passes: in one-pass mode the model tended to short-circuit from
 "market stall" straight to "creator looks discouraged" and miss the
@@ -151,6 +151,22 @@ makes that failure mode much harder.
 `raw_analysis` in the SQLite row carries both passes verbatim
 (`analysis_mode: "two_pass"`, `visual_event_pass: {...}`,
 `hook_strategy_pass: {...}`) so you can audit either pass after the fact.
+
+### Output mental model (Phase 4)
+
+The tool answers six questions about every video:
+
+1. What is the **viral mechanic**?
+2. Why does it **stop the scroll** in the first 1–2 seconds?
+3. What **viewer role** does it create?
+4. What is the **comment trigger** / **share trigger**?
+5. Which **parts are cooked** right now?
+6. What are 8 **broad creative hook concepts** that re-use the same mechanic in NEW emotional situations?
+
+The product/niche of the source video is **not** the asset. The mechanic
+is. The concepts are intentionally broad — they're meant to attach to
+many products later, not just the one in the source video. Two concepts
+that only differ in what object is on screen count as one concept.
 
 ### Calibration / regression canary
 

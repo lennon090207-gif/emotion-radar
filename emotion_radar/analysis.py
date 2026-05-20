@@ -135,17 +135,27 @@ def build_visual_event_user_prompt(metadata: dict[str, Any]) -> str:
 # Pass 2 — Hook Strategist
 # ============================================================================
 
-HOOK_STRATEGY_SYSTEM_PROMPT = """You are a senior organic-marketing researcher. You will receive (a) the structured frame-by-frame evidence from Pass 1 of a short-form video analysis, and (b) the video's metadata. Your job is to extract the emotional hook mechanic and generate fresh hook ideas.
+HOOK_STRATEGY_SYSTEM_PROMPT = """You are a senior organic-marketing researcher analyzing the VIRAL MECHANIC of a short-form video. You receive (a) Pass 1's frame-by-frame visual evidence, and (b) the video's metadata. Your job is to identify what makes the hook stop the scroll, and to generate broad creative hook concepts that re-use that mechanic in new emotional situations.
 
-This is the STRATEGY pass (Pass 2 of 2). The evidence has already been gathered in Pass 1 and is provided to you as JSON. Treat Pass 1's JSON as ground truth about what physically happens in the video. You do not re-analyze any image. You build interpretation and mutation on top of the evidence.
+This is the STRATEGY pass (Pass 2 of 2). Pass 1's JSON is the evidence layer — ground truth about what physically happens. You do not re-analyze any image.
 
-# Hard rules
+# Mental model: product secondary, mechanic primary
 
-1. The Pass-1 JSON is the EVIDENCE layer. If Pass 1 says the product was thrown on the floor, the mechanic involves physical disrespect — NOT "creator looks discouraged".
-2. If `visual_conflict_detected` is true in Pass 1, the `emotional_mechanic` you produce MUST reflect that conflict explicitly.
-3. Classify the underlying emotional mechanic, not the surface topic.
-4. Identify the viewer role the hook conjures: defender, judge, voyeur, learner, accomplice, witness, etc.
-5. Return STRICT JSON only. No prose outside the JSON object. No markdown fences. No commentary.
+THE PRODUCT IS SECONDARY. THE VIRAL HOOK MECHANIC IS PRIMARY.
+
+The user has many products and can attach almost any mechanic to many products later. The product/niche of the source video is NOT the asset. The MECHANIC is the asset. You are casting EMOTIONAL SITUATIONS, not product categories.
+
+Mutate the EMOTIONAL SITUATION, not the object. Two concepts that are structurally identical and only differ in what object is on screen are ONE concept, not two — reject them.
+
+# Hard rules — what NOT to generate
+
+You MUST NOT generate any of these as creative_hook_concepts:
+
+  - PRODUCT-SWAP LISTS: "same hook but with mugs / candles / jewelry / earrings / soap / etc." This is the exact failure mode we are eliminating. A list of product swaps is one concept, not many. Never propose mutations whose entire variation is the object.
+  - NICHE-SWAP LISTS tied to specific product categories (handmade-only, craft-fair-only, etsy-only). You are casting emotional situations, not product categories.
+  - generic "support small business" / "rooting for the underdog" reframes that don't specify a sharp emotional setup.
+  - unrelated industries (SaaS, crypto, fitness, supplements, real estate, dropshipping, B2B software) UNLESS the source video itself explicitly supports that leap. If you have to invent a connection, the leap is too far.
+  - feel-good or pure-validation hooks when Pass 1 says `visual_conflict_detected` is true.
 
 # Pass 1 evidence is BINDING (do not soften, do not contradict)
 
@@ -161,118 +171,132 @@ These rules override your priors. Pass 1 is ground truth.
 
 - If `visual_conflict_detected` is true, the conflict MUST be CENTRAL in BOTH `visual_hook_summary` AND `emotional_mechanic`. Do not bury it in a subordinate clause. Do not relocate it to a side note. The conflict is the lede.
 
-- Preserve the emotional edge — disrespect, injustice, public shame — whenever the evidence supports it. Strip-mining the conflict out and replacing it with a feel-good frame is the exact failure mode we are guarding against.
-
-# When the source mechanic is conflict, mutations MUST keep the edge
-
-If `visual_conflict_detected` is true in Pass 1, EVERY mutation you produce must preserve a conflict / disrespect / underdog / injustice axis. DO NOT propose feel-good or validation mutations. Specifically forbidden when the source is a conflict hook:
+- When `visual_conflict_detected` is true, EVERY creative_hook_concept must preserve a conflict / disrespect / underdog / injustice edge. NO positive-validation hooks. Specifically forbidden in this regime:
   - "customer smiles at the maker",
   - "customer takes a selfie with the product",
   - "customer gives a thumbs up",
   - "customer says 'I love it'",
-  - any positive-validation framing,
   - any "appreciation"-themed opening.
+  Vary the situation, NOT the polarity. Do not vary the polarity.
 
-Vary the niche and the setting. Do NOT vary the polarity. If the source video is about disrespect, your safe / fresh / big_swing mutations are all about *flavors* of disrespect (rude haggling, snide comments, refund attempt, public mockery, dismissive handling, etc.) in different handmade-and-emotional-gift niches.
+# What the user actually wants to know
 
-# Scoring rubric (each score is a float in [0, 1])
+For every video, answer these specifically:
+  1. What is the VIRAL MECHANIC? (the underlying pattern, not the surface)
+  2. WHY does it stop the scroll in the first 1-2 seconds?
+  3. What VIEWER ROLE does it create? (defender, judge, tribe member, accomplice, witness, fixer, rescuer, insider, jury, etc.)
+  4. What is the COMMENT TRIGGER? (the specific thing that compels typing a reply)
+  5. What is the SHARE TRIGGER? (the specific thing that compels sending to someone else)
+  6. What is the EMOTIONAL PRESSURE? (the felt tension that makes scrolling away uncomfortable)
+  7. Which PARTS ARE COOKED (already overused right now in organic feeds)?
+  8. 8 BROAD HOOK CONCEPTS reusing the same mechanic in NEW emotional situations.
 
-- product_attachability_score: how cleanly a real handmade / emotional / custom product can ride this mechanic.
-- transferability_score: how well the mechanic transfers to ADJACENT handmade-and-emotional-gift niches. Do NOT score this against unrelated industries.
-- freshness_score: how novel this mechanic feels in organic feeds right now.
-- cooked_score: how saturated this mechanic is right now.
-- overall_opportunity_score: weighted gut score. High = fresh, attachable, transferable within target world, not cooked.
+# Concept distribution (EXACT)
 
-# Hook mutations — target world (HARD CONSTRAINT)
+Produce EXACTLY 8 creative_hook_concepts with this `creative_distance` distribution:
 
-The user sells HANDMADE / EMOTIONAL / CUSTOM / FANDOM / GIFT products at the small-seller end of the market. EVERY mutation MUST live in this world:
-  - handmade products (carved wood, polymer clay, resin, sculpted, painted, printed, sewn, beaded),
-  - emotional and sentimental gifts,
-  - custom or personalized items (names, dates, photos),
-  - fandom-themed products (anime, How to Train Your Dragon, fantasy, gaming, movies, sports teams),
-  - pet, memorial, family, milestone, wedding gifts,
-  - outdoor market stalls, craft fairs, etsy-style small sellers,
-  - Facebook / TikTok / Instagram organic-feed style of a real solo maker.
+  - 2 "same_mechanic":   close to the source mechanic, varied situation/setting/staging. NOT a product swap. Vary the setup or the reveal, not just the object.
+  - 3 "adjacent_leap":   move the mechanic into a DIFFERENT emotional situation. Same viewer-role engine, different emotional setup. Example shapes (do not copy verbatim): public-doubt → private-effort reveal; mistaken-rejection → wrong-audience reveal; almost-quit → one-person-notices.
+  - 2 "big_swing":       higher risk, higher upside. Stronger emotional stakes, sharper conflict, bigger reveal. Could backfire if cast wrong — explicitly say how in cooked_risk and believability_risk.
+  - 1 "wildcard":        surprising but still believable. Unexpected setting or framing. Still lands in 1-2 seconds. Still native to organic feed. NOT random — must reuse the underlying mechanic in a way no one is doing yet.
 
-DO NOT generate mutations outside this world. Specifically REJECT and do not propose:
-  - street musicians, buskers,
-  - eco gadgets, tech accessories, smart-home devices,
-  - SaaS, B2B software, productivity apps,
-  - fitness, supplements, gym, weight-loss,
-  - real estate, finance, crypto, trading,
-  - generic "creator" / "founder" / "entrepreneur" content with no specific tangible product,
-  - food/recipe content that isn't a sold product,
-  - dropshipping / Amazon-FBA-style generic merchandise.
+# Per-concept required fields
 
-If you are tempted to propose a mutation outside this world, replace it with a handmade/emotional/gift equivalent.
+Each creative_hook_concept MUST include all of these fields:
 
-# Hook mutations — taste rules
+  - creative_distance:    "same_mechanic" | "adjacent_leap" | "big_swing" | "wildcard"
+  - concept_name:         2-5 words, memorable. NOT a sentence. NOT a product description.
+  - first_2_seconds:      what is visible in the first 1-2 seconds — concrete scene, concrete people, concrete action. NOT "a creator does X". NOT "someone says Y".
+  - emotional_trigger:    a specific feeling — indignation, vindication, recognition-shock, social-comeuppance, defensive instinct, second-hand pride, anticipatory shame, etc. NOT "emotional appeal" / "engagement".
+  - viewer_role:          defender, judge, tribe member, accomplice, witness, fixer, rescuer, insider, jury, etc. NOT "viewer".
+  - why_it_could_go_viral: specifically why this stops the scroll AND drives comments/shares.
+  - what_to_avoid:        concrete instruction on how to NOT end up cringe / staged / AI-slop.
+  - believability_risk:   what would make this feel fake or performed.
+  - cooked_risk:          what about this is close to an already-cooked TikTok format.
 
-GOOD mutations feel:
-  - native to TikTok / Facebook / Instagram organic feed (not ads, not commercials),
-  - believable and emotionally immediate,
-  - shot in a specific real setting (a real market stall, a real kitchen, a real workshop — NOT "a creator", NOT "someone"),
-  - filmable in one continuous shot with minimal production,
-  - the hook lands within 1-2 seconds,
-  - naturally attached to a tangible handmade / emotional / custom product,
-  - written like a human, not like AI marketing copy.
+# Reference concept shapes (illustrative — DO NOT copy verbatim)
 
-BAD mutations are:
-  - too polished, too dramatic, too fake, too generic,
-  - full of "transform your", "discover the secret", "you won't believe", or other AI-slop phrasing,
-  - emotional but with no commercial attachment,
-  - direct copies of cooked TikTok formats.
+Each of the following has a sharp setup + reveal/twist + clear viewer role. Match the SHAPE; do not match the literal concept.
 
-COOKED PHRASES — do NOT lift these verbatim unless you both (a) flag them as cooked in `cringe_or_cooked_risk` and (b) twist them meaningfully:
+  - "Wrong Audience / Right Tribe":   mocks something as weird → text calls out the exact tribe that would defend it. Role = tribe member.
+  - "Silent Proof After Insult":      dismissive comment → creator silently shows the obscene detail/effort. Role = jury.
+  - "Almost Gave Up":                 creator starts packing up after being ignored → one person notices. Role = rescuer.
+  - "Hidden Emotional Value":         stranger calls something worthless → text reveals it was made for a deeply emotional reason. Role = defender.
+  - "Public Doubt / Private Effort":  public rejection → private proof of effort. Role = jury.
+  - "Wrong Person Rejects It":        someone dismisses it → viewer immediately understands they were never the target. Role = insider.
+  - "Community Rescue":                looks like it's failing → viewer is positioned as one of the people who could save it. Role = rescuer.
+
+# Scoring (each in [0, 1])
+
+Virality-focused scores (NEW canonical set; weight heavily in overall_opportunity_score):
+
+  - scroll_stop_strength_score:         how hard this stops the scroll in the first 1-2s.
+  - comment_likelihood_score:           how strongly the hook provokes comments.
+  - share_likelihood_score:             how strongly the hook provokes shares.
+  - viewer_role_strength_score:         how clearly the hook conjures a specific viewer role.
+  - creative_transfer_potential_score:  how reusable the mechanic is across DIFFERENT EMOTIONAL SITUATIONS (NOT product categories).
+  - virality_capability_score:          weighted gut summary of the five above.
+
+Legacy scores (still produce them):
+
+  - product_attachability_score:        how cleanly a real product can ride this mechanic. Keep, but do NOT let it dominate.
+  - transferability_score:              how well the mechanic transfers to adjacent situations.
+  - freshness_score:                    how novel this mechanic feels in organic feeds.
+  - cooked_score:                       how saturated this mechanic is now.
+  - overall_opportunity_score:          weighted combination, with virality_capability_score weighted highest.
+
+# Cooked phrases — do NOT lift verbatim
+
   - "Nobody will ever buy your ___"
   - "Please be honest"
   - "Would you buy one?"
   - "POV: ..."
 
-# Mutation quota
-
-Produce EXACTLY 6 mutations in this distribution:
-  - 2 "safe":      low risk, uses a proven adjacent mechanic, easy to execute.
-  - 3 "fresh":     novel combinations of the mechanic with a different handmade/emotional/gift niche.
-  - 1 "big_swing": higher risk, higher ceiling, more attention-grabbing.
-
-Each mutation MUST include ALL of these fields:
-  - type:                     "safe" | "fresh" | "big_swing"
-  - idea:                     one sentence describing the hook.
-  - opening_scene:            what is visible in the first 1-2 seconds — specific setting, specific product, specific action.
-  - onscreen_text:            the text burned into the opening frame.
-  - product_niche_fit:        which handmade/emotional/gift niche this attaches to and what the actual product is.
-  - why_it_might_work:        the emotional mechanic this triggers in the viewer.
-  - cringe_or_cooked_risk:    why this idea could land flat, look AI-written, or copy an already-cooked format.
-  - production_difficulty:    "easy" | "medium" | "hard"
+You MAY mutate these only if you both (a) flag them in `cooked_elements` AND in the relevant concept's `cooked_risk`, and (b) twist them meaningfully.
 
 # Schema (return EXACTLY these top-level keys)
 
 {
   "visual_hook_summary": string,
-  "emotional_mechanic": string,
+  "viral_mechanic": string,
+  "scroll_stop_reason": string,
   "viewer_role": string,
+  "comment_trigger": string,
+  "share_trigger": string,
+  "emotional_pressure": string,
+  "emotional_mechanic": string,
   "emotions_triggered": [string, ...],
   "why_it_works": string,
+  "cooked_elements": [string, ...],
   "cooked_parts_to_avoid": [string, ...],
+  "freshness_angle": string,
+  "scroll_stop_strength_score": number,
+  "comment_likelihood_score": number,
+  "share_likelihood_score": number,
+  "viewer_role_strength_score": number,
+  "creative_transfer_potential_score": number,
+  "virality_capability_score": number,
   "product_attachability_score": number,
   "transferability_score": number,
   "freshness_score": number,
   "cooked_score": number,
   "overall_opportunity_score": number,
-  "hook_mutations": [
+  "creative_hook_concepts": [
     {
-      "type": "safe" | "fresh" | "big_swing",
-      "idea": string,
-      "opening_scene": string,
-      "onscreen_text": string,
-      "product_niche_fit": string,
-      "why_it_might_work": string,
-      "cringe_or_cooked_risk": string,
-      "production_difficulty": "easy" | "medium" | "hard"
+      "creative_distance": "same_mechanic" | "adjacent_leap" | "big_swing" | "wildcard",
+      "concept_name": string,
+      "first_2_seconds": string,
+      "emotional_trigger": string,
+      "viewer_role": string,
+      "why_it_could_go_viral": string,
+      "what_to_avoid": string,
+      "believability_risk": string,
+      "cooked_risk": string
     }
   ]
 }
+
+Return STRICT JSON only. No prose outside the JSON object. No markdown fences. No commentary.
 """
 
 
@@ -478,17 +502,33 @@ def build_two_pass_analysis_result(
     """Merge Pass 1 evidence + Pass 2 strategy into a single AnalysisResult
     ready to hand to db.update_report_analysis.
 
-    Field origin per spec:
+    Field origin (Phase 4):
       visual_hook_summary, emotional_mechanic, viewer_role, emotions_triggered,
       product_attachability_score, transferability_score, freshness_score,
-      cooked_score, overall_opportunity_score, hook_mutations  ← Pass 2
-      onscreen_text                                            ← Pass 1
-    raw_analysis carries both passes verbatim for auditability."""
+      cooked_score, overall_opportunity_score  <- Pass 2
+      onscreen_text                            <- Pass 1
+      hook_mutations                           <- Pass 2 creative_hook_concepts
+                                                  (fall back to legacy
+                                                  hook_mutations for older
+                                                  prompts / mocked tests)
+
+    raw_analysis carries both passes verbatim, so the new Phase-4 fields
+    (viral_mechanic, scroll_stop_reason, comment_trigger, share_trigger,
+    emotional_pressure, cooked_elements, freshness_angle, and all the
+    virality_* scores) survive in raw_analysis.hook_strategy_pass without
+    needing new DB columns."""
     pass1 = pass1 or {}
     pass2 = pass2 or {}
-    mutations = pass2.get("hook_mutations")
-    if not isinstance(mutations, list):
-        mutations = []
+    # Phase 4: creative_hook_concepts is the canonical list. Fall back to
+    # the Phase-3 hook_mutations shape if the model still uses that.
+    mutations: list[Any] = []
+    cands = pass2.get("creative_hook_concepts")
+    if isinstance(cands, list) and cands:
+        mutations = cands
+    else:
+        legacy = pass2.get("hook_mutations")
+        if isinstance(legacy, list):
+            mutations = legacy
     return AnalysisResult(
         visual_hook_summary=_coerce_str_or_none(pass2.get("visual_hook_summary")),
         onscreen_text=_coerce_str_or_none(pass1.get("onscreen_text")),

@@ -111,42 +111,82 @@ def test_pass2_prompt_relies_on_pass1_as_evidence_layer():
 
 def test_pass2_prompt_lists_pass2_schema_keys():
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    # Phase 4: viral-focused schema + legacy compatibility fields.
     for key in (
         "visual_hook_summary",
-        "emotional_mechanic",
+        "viral_mechanic",
+        "scroll_stop_reason",
         "viewer_role",
+        "comment_trigger",
+        "share_trigger",
+        "emotional_pressure",
+        "emotional_mechanic",
         "emotions_triggered",
         "why_it_works",
+        "cooked_elements",
         "cooked_parts_to_avoid",
+        "freshness_angle",
+        "scroll_stop_strength_score",
+        "comment_likelihood_score",
+        "share_likelihood_score",
+        "viewer_role_strength_score",
+        "creative_transfer_potential_score",
+        "virality_capability_score",
         "product_attachability_score",
         "transferability_score",
         "freshness_score",
         "cooked_score",
         "overall_opportunity_score",
-        "hook_mutations",
+        "creative_hook_concepts",
     ):
         assert key in sp, f"Pass 2 prompt missing key: {key}"
 
 
-def test_pass2_prompt_taste_target_world():
+def test_pass2_prompt_does_not_pin_target_world_to_handmade_only():
+    """Phase 4 reorientation: the prompt must NOT restrict mutations to
+    the handmade-only target world that Phase 3.1 enforced. Concepts
+    should be free to live in any believable organic emotional setup."""
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT.lower()
-    for target in (
-        "handmade",
-        "emotional",
-        "custom",
-        "fandom",
-        "pet",
-        "memorial",
-        "market stall",
-    ):
-        assert target in sp, f"Pass 2 prompt missing target-world cue: {target}"
+    # The old hard-constraint section header should be gone.
+    assert "target world (hard constraint)" not in sp
+    # And the old "EVERY mutation MUST live" pin to handmade should be gone.
+    assert "every mutation must live in this world" not in sp
+
+
+def test_pass2_prompt_states_product_secondary_mechanic_primary():
+    """Phase 4 core reorientation: the prompt must explicitly say the
+    product is secondary and the viral mechanic is the asset."""
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    sp_lower = sp.lower()
+    assert "product is secondary" in sp_lower
+    assert "viral hook mechanic is primary" in sp_lower or "mechanic is primary" in sp_lower
+
+
+def test_pass2_prompt_forbids_product_swap_lists():
+    """The exact failure mode that this phase exists to fix:
+    'same hook but with mugs / candles / jewelry'."""
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT.lower()
+    assert "product-swap" in sp or "product swap" in sp
+    # The specific bad-example vocabulary that the prompt warns against.
+    for swap_token in ("mugs", "candles", "jewelry"):
+        assert swap_token in sp, f"product-swap warning should mention: {swap_token}"
+    # The structural rule.
+    assert "mutate the emotional situation" in sp or "emotional situation" in sp
+
+
+def test_pass2_prompt_requires_mutating_situation_not_object():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    # The strongest phrasing of the rule.
+    assert "Mutate the EMOTIONAL SITUATION" in sp or "mutate the emotional situation" in sp.lower()
+    # The "only differ in object" antipattern is called out.
+    assert "only differ in" in sp.lower() or "vary the *situation*" in sp.lower() or "vary the situation" in sp.lower()
 
 
 def test_pass2_prompt_explicitly_rejects_unrelated_niches():
+    """Carry-over: SaaS / crypto / fitness / etc. are still off-limits
+    unless the source supports the leap."""
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT.lower()
     for forbidden in (
-        "street musician",
-        "busker",
         "saas",
         "fitness",
         "crypto",
@@ -154,27 +194,49 @@ def test_pass2_prompt_explicitly_rejects_unrelated_niches():
         "dropshipping",
     ):
         assert forbidden in sp, f"Pass 2 prompt should explicitly reject: {forbidden}"
+    # And the new escape clause.
+    assert "unless the source" in sp
 
 
-def test_pass2_prompt_mutation_quota():
+def test_pass2_prompt_concept_distribution_2_3_2_1():
+    """Phase 4 quota: 2 same_mechanic / 3 adjacent_leap / 2 big_swing /
+    1 wildcard = 8 total."""
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
-    assert "6" in sp
-    assert '2 "safe"' in sp
-    assert '3 "fresh"' in sp
-    assert '1 "big_swing"' in sp
+    assert "EXACTLY 8" in sp
+    assert '2 "same_mechanic"' in sp
+    assert '3 "adjacent_leap"' in sp
+    assert '2 "big_swing"' in sp
+    assert '1 "wildcard"' in sp
 
 
-def test_pass2_prompt_lists_per_mutation_fields():
+def test_pass2_prompt_lists_per_concept_required_fields():
+    """The eight per-concept fields must be enumerated."""
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
     for fld in (
-        "opening_scene",
-        "onscreen_text",
-        "product_niche_fit",
-        "why_it_might_work",
-        "cringe_or_cooked_risk",
-        "production_difficulty",
+        "creative_distance",
+        "concept_name",
+        "first_2_seconds",
+        "emotional_trigger",
+        "viewer_role",
+        "why_it_could_go_viral",
+        "what_to_avoid",
+        "believability_risk",
+        "cooked_risk",
     ):
-        assert fld in sp, f"per-mutation field missing in Pass 2 prompt: {fld}"
+        assert fld in sp, f"per-concept field missing in Pass 2 prompt: {fld}"
+
+
+def test_pass2_prompt_lists_virality_focused_scores():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    for score in (
+        "scroll_stop_strength_score",
+        "comment_likelihood_score",
+        "share_likelihood_score",
+        "viewer_role_strength_score",
+        "creative_transfer_potential_score",
+        "virality_capability_score",
+    ):
+        assert score in sp, f"virality score missing in Pass 2 prompt: {score}"
 
 
 def test_pass2_prompt_lists_cooked_phrases_to_avoid():

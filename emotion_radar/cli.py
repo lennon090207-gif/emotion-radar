@@ -430,9 +430,31 @@ def _fmt_score(v: Any) -> str:
     return f"{v:.2f}" if isinstance(v, (int, float)) else "—"
 
 
+_CREATIVE_DISTANCES = ("same_mechanic", "adjacent_leap", "big_swing", "wildcard")
+_DISTANCE_LABELS = {
+    "same_mechanic": "Same Mechanic",
+    "adjacent_leap": "Adjacent Leap",
+    "big_swing": "Big Swing",
+    "wildcard": "Wildcard",
+}
+
+
 def _print_final_report(report: dict[str, Any]) -> None:
-    """Concise markdown-ish summary for analyze-link."""
+    """Phase-4 viral-mechanic summary for analyze-link.
+
+    Prioritises: viral mechanic, scroll-stop reason, viewer role, comment
+    trigger, share trigger, cooked elements, virality scores, and the 8
+    broad hook concepts grouped by creative_distance. Product
+    attachability is intentionally de-emphasised — the goal is the
+    mechanic, not the product."""
     metrics = report.get("metrics") or {}
+    raw = report.get("raw_analysis") or {}
+    hsp: dict[str, Any] = {}
+    if isinstance(raw, dict):
+        v = raw.get("hook_strategy_pass")
+        if isinstance(v, dict):
+            hsp = v
+
     click.echo("\nEmotion Radar Report")
     click.echo("=" * 60)
     click.echo(f"Report ID:       {report.get('id')}")
@@ -455,58 +477,91 @@ def _print_final_report(report: dict[str, Any]) -> None:
         return
 
     click.echo("")
-    click.echo(f"Visual Hook:        {report.get('visual_hook_summary') or '—'}")
-    click.echo(f"On-screen Text:     {report.get('onscreen_text') or '—'}")
-    click.echo(f"Emotional Mechanic: {report.get('emotional_mechanic') or '—'}")
-    click.echo(f"Viewer Role:        {report.get('viewer_role') or '—'}")
+    click.echo(f"Visual Hook:       {report.get('visual_hook_summary') or '—'}")
+    click.echo(f"On-screen Text:    {report.get('onscreen_text') or '—'}")
+
+    click.echo("\nViral Mechanic Analysis")
+    click.echo("-" * 60)
+    viral_mech = hsp.get("viral_mechanic") or report.get("emotional_mechanic")
+    click.echo(f"Viral Mechanic:        {viral_mech or '—'}")
+    click.echo(f"Why Stops Scroll:      {hsp.get('scroll_stop_reason') or '—'}")
+    click.echo(f"Viewer Role:           {hsp.get('viewer_role') or report.get('viewer_role') or '—'}")
+    click.echo(f"Comment Trigger:       {hsp.get('comment_trigger') or '—'}")
+    click.echo(f"Share Trigger:         {hsp.get('share_trigger') or '—'}")
+    click.echo(f"Emotional Pressure:    {hsp.get('emotional_pressure') or '—'}")
+    click.echo(f"Freshness Angle:       {hsp.get('freshness_angle') or '—'}")
+    cooked_elements = hsp.get("cooked_elements") or []
+    if isinstance(cooked_elements, list) and cooked_elements:
+        click.echo("Cooked Elements:")
+        for item in cooked_elements:
+            click.echo(f"  - {item}")
+    else:
+        click.echo("Cooked Elements:       —")
     emotions = report.get("emotions_triggered") or []
     if emotions:
-        click.echo(f"Emotions:           {', '.join(emotions)}")
+        click.echo(f"Emotions Triggered:    {', '.join(emotions)}")
 
-    click.echo("\nScores")
-    click.echo(f"  Freshness:            {_fmt_score(report.get('freshness_score'))}")
-    click.echo(f"  Cooked:               {_fmt_score(report.get('cooked_score'))}")
-    click.echo(f"  Transferability:      {_fmt_score(report.get('transferability_score'))}")
-    click.echo(f"  Product Attachability:{_fmt_score(report.get('product_attachability_score'))}")
-    click.echo(f"  Overall Opportunity:  {_fmt_score(report.get('overall_opportunity_score'))}")
+    click.echo("\nVirality Scores")
+    click.echo("-" * 60)
+    click.echo(f"  Scroll-stop strength:      {_fmt_score(hsp.get('scroll_stop_strength_score'))}")
+    click.echo(f"  Comment likelihood:        {_fmt_score(hsp.get('comment_likelihood_score'))}")
+    click.echo(f"  Share likelihood:          {_fmt_score(hsp.get('share_likelihood_score'))}")
+    click.echo(f"  Viewer role strength:      {_fmt_score(hsp.get('viewer_role_strength_score'))}")
+    click.echo(f"  Creative transfer pot.:    {_fmt_score(hsp.get('creative_transfer_potential_score'))}")
+    click.echo(f"  Virality capability:       {_fmt_score(hsp.get('virality_capability_score'))}")
+    click.echo(f"  Overall opportunity:       {_fmt_score(report.get('overall_opportunity_score'))}")
+    click.echo(f"  Freshness (legacy):        {_fmt_score(report.get('freshness_score'))}")
+    click.echo(f"  Cooked (legacy):           {_fmt_score(report.get('cooked_score'))}")
 
-    mutations = report.get("hook_mutations") or []
-    by_type: dict[str, list[dict[str, Any]]] = {"safe": [], "fresh": [], "big_swing": []}
+    concepts = report.get("hook_mutations") or []
+    by_distance: dict[str, list[dict[str, Any]]] = {k: [] for k in _CREATIVE_DISTANCES}
     extras: list[dict[str, Any]] = []
-    for m in mutations:
+    for m in concepts:
         if not isinstance(m, dict):
             continue
-        t = (m.get("type") or "").strip().lower()
-        if t in by_type:
-            by_type[t].append(m)
+        dist = (m.get("creative_distance") or "").strip().lower()
+        if dist in by_distance:
+            by_distance[dist].append(m)
         else:
             extras.append(m)
 
-    click.echo("\nHook Ideas")
-    for label, key in (("Safe", "safe"), ("Fresh", "fresh"), ("Big Swing", "big_swing")):
-        bucket = by_type[key]
-        click.echo(f"\n  -- {label} ({len(bucket)}) --")
+    click.echo("\nBroad Hook Concepts")
+    click.echo("-" * 60)
+    for key in _CREATIVE_DISTANCES:
+        bucket = by_distance[key]
+        click.echo(f"\n  -- {_DISTANCE_LABELS[key]} ({len(bucket)}) --")
         if not bucket:
             click.echo("    (none)")
             continue
         for i, m in enumerate(bucket, start=1):
-            click.echo(f"    {i}. {m.get('idea') or '(no idea)'}")
-            if m.get("opening_scene"):
-                click.echo(f"       opening_scene:   {m['opening_scene']}")
-            if m.get("onscreen_text"):
-                click.echo(f"       onscreen_text:   {m['onscreen_text']}")
-            if m.get("product_niche_fit"):
-                click.echo(f"       product/niche:   {m['product_niche_fit']}")
-            if m.get("why_it_might_work"):
-                click.echo(f"       why_it_works:    {m['why_it_might_work']}")
-            if m.get("cringe_or_cooked_risk"):
-                click.echo(f"       risk:            {m['cringe_or_cooked_risk']}")
-            if m.get("production_difficulty"):
-                click.echo(f"       difficulty:      {m['production_difficulty']}")
+            click.echo(f"    {i}. {m.get('concept_name') or m.get('idea') or '(no name)'}")
+            if m.get("first_2_seconds"):
+                click.echo(f"       first 2 seconds:    {m['first_2_seconds']}")
+            elif m.get("opening_scene"):
+                click.echo(f"       first 2 seconds:    {m['opening_scene']}")
+            if m.get("emotional_trigger"):
+                click.echo(f"       emotional trigger:  {m['emotional_trigger']}")
+            if m.get("viewer_role"):
+                click.echo(f"       viewer role:        {m['viewer_role']}")
+            if m.get("why_it_could_go_viral"):
+                click.echo(f"       why viral:          {m['why_it_could_go_viral']}")
+            elif m.get("why_it_might_work"):
+                click.echo(f"       why viral:          {m['why_it_might_work']}")
+            if m.get("what_to_avoid"):
+                click.echo(f"       what to avoid:      {m['what_to_avoid']}")
+            if m.get("believability_risk"):
+                click.echo(f"       believability risk: {m['believability_risk']}")
+            if m.get("cooked_risk"):
+                click.echo(f"       cooked risk:        {m['cooked_risk']}")
+            elif m.get("cringe_or_cooked_risk"):
+                click.echo(f"       cooked risk:        {m['cringe_or_cooked_risk']}")
+
     if extras:
-        click.echo(f"\n  -- Other ({len(extras)}, unrecognised type) --")
+        click.echo(f"\n  -- Other ({len(extras)}, unrecognised creative_distance) --")
         for m in extras:
-            click.echo(f"    - {m.get('idea') or m}")
+            t = m.get("type") or m.get("creative_distance") or "?"
+            label = m.get("concept_name") or m.get("idea") or "(no name)"
+            click.echo(f"    [{t}] {label}")
 
 
 def _print_evaluation(

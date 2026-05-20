@@ -80,25 +80,49 @@ PASS2_GOOD = {
         "At an outdoor market stall, a stranger picks up a handmade "
         "dragon lamp and smashes it on the floor while the maker watches."
     ),
-    "emotional_mechanic": "public disrespect of an underdog maker + viewer-defense instinct",
+    "viral_mechanic": "public disrespect + underdog maker → viewer-defense instinct",
+    "scroll_stop_reason": (
+        "physical destruction of a small maker's work creates instant moral outrage"
+    ),
     "viewer_role": "defender",
-    "emotions_triggered": ["anger", "protectiveness", "sympathy"],
-    "why_it_works": "viewer wants to step in and protect; high comment-bait",
-    "cooked_parts_to_avoid": ["overly staged 'random stranger' framing"],
-    "product_attachability_score": 0.78,
+    "comment_trigger": "viewer wants to verbally retaliate on behalf of the maker",
+    "share_trigger": "send-to-friend impulse to validate shared sense of injustice",
+    "emotional_pressure": (
+        "felt injustice that scrolling away would be 'letting it stand'"
+    ),
+    "emotional_mechanic": "public disrespect + underdog maker (viewer-defense instinct)",
+    "emotions_triggered": ["anger", "protectiveness", "indignation"],
+    "why_it_works": "the destruction is a public moral violation; defenders self-cast.",
+    "cooked_elements": ["please be honest framing", "staged stranger trope"],
+    "cooked_parts_to_avoid": ["please be honest"],
+    "freshness_angle": "physical-destruction tier of public-doubt mechanic, not merely insult",
+    "scroll_stop_strength_score": 0.86,
+    "comment_likelihood_score": 0.81,
+    "share_likelihood_score": 0.72,
+    "viewer_role_strength_score": 0.83,
+    "creative_transfer_potential_score": 0.74,
+    "virality_capability_score": 0.79,
+    "product_attachability_score": 0.62,
     "transferability_score": 0.66,
     "freshness_score": 0.71,
     "cooked_score": 0.34,
-    "overall_opportunity_score": 0.74,
-    "hook_mutations": [
+    "overall_opportunity_score": 0.78,
+    "creative_hook_concepts": [
         {
-            "type": "safe", "idea": "Maker shows lamp; rude customer demands a discount",
-            "opening_scene": "wide stall shot, hand-made lamps visible",
-            "onscreen_text": "she just asked me to do this for free",
-            "product_niche_fit": "handmade fandom lamps / craft fair sellers",
-            "why_it_might_work": "indignation engine; defender role",
-            "cringe_or_cooked_risk": "tips into staged territory if acting is bad",
-            "production_difficulty": "easy",
+            "creative_distance": "same_mechanic",
+            "concept_name": "Silent Proof After Insult",
+            "first_2_seconds": (
+                "cut from a dismissive comment overlay to the maker silently "
+                "lifting one finished piece and rotating it to show obscene detail"
+            ),
+            "emotional_trigger": "vindication",
+            "viewer_role": "jury",
+            "why_it_could_go_viral": (
+                "viewer feels they have just rendered a verdict against the heckler"
+            ),
+            "what_to_avoid": "don't narrate; let the silence do the work",
+            "believability_risk": "feels staged if the comment overlay reads written by the creator",
+            "cooked_risk": "silent-reveal format is widely used; the proof must be sharp",
         }
     ],
 }
@@ -169,7 +193,7 @@ def test_analyze_two_pass_uses_separate_providers_when_supplied(tmp_path: Path):
     strategy = _MockVisionProvider(image_response="X", text_response=json.dumps(PASS2_GOOD))
     pass1, pass2 = A.analyze_two_pass(sheet, {}, vision, strategy)
     assert pass1["conflict_type"] == "smash"
-    assert pass2["overall_opportunity_score"] == 0.74
+    assert pass2["overall_opportunity_score"] == 0.78
     # Each provider sees exactly one call of the right kind.
     assert len(vision.image_calls) == 1 and vision.text_calls == []
     assert strategy.image_calls == [] and len(strategy.text_calls) == 1
@@ -204,13 +228,38 @@ def test_merge_sources_onscreen_text_from_pass1_other_fields_from_pass2():
     assert result.visual_hook_summary.startswith("At an outdoor market stall")
     assert result.emotional_mechanic.startswith("public disrespect")
     assert result.viewer_role == "defender"
-    assert result.emotions_triggered == ["anger", "protectiveness", "sympathy"]
-    assert result.product_attachability_score == 0.78
+    assert result.emotions_triggered == ["anger", "protectiveness", "indignation"]
+    assert result.product_attachability_score == 0.62
     assert result.transferability_score == 0.66
     assert result.freshness_score == 0.71
     assert result.cooked_score == 0.34
-    assert result.overall_opportunity_score == 0.74
+    assert result.overall_opportunity_score == 0.78
+    # Phase 4: hook_mutations is now sourced from creative_hook_concepts.
     assert len(result.hook_mutations) == 1
+    assert result.hook_mutations[0]["creative_distance"] == "same_mechanic"
+
+
+def test_merge_prefers_creative_hook_concepts_over_legacy_hook_mutations():
+    """Phase 4: when Pass 2 returns both, creative_hook_concepts wins."""
+    pass2 = {
+        **PASS2_GOOD,
+        "hook_mutations": [{"type": "safe", "idea": "legacy entry that should lose"}],
+    }
+    result = A.build_two_pass_analysis_result(PASS1_GOOD, pass2)
+    assert result.hook_mutations == PASS2_GOOD["creative_hook_concepts"]
+
+
+def test_merge_falls_back_to_legacy_hook_mutations_if_no_concepts():
+    """Older Pass-2 prompts that still emit hook_mutations work."""
+    pass2 = {
+        k: v for k, v in PASS2_GOOD.items() if k != "creative_hook_concepts"
+    }
+    pass2["hook_mutations"] = [
+        {"type": "safe", "idea": "legacy idea", "opening_scene": "..."}
+    ]
+    result = A.build_two_pass_analysis_result(PASS1_GOOD, pass2)
+    assert len(result.hook_mutations) == 1
+    assert result.hook_mutations[0]["type"] == "safe"
 
 
 def test_merge_raw_analysis_carries_both_passes():
@@ -238,8 +287,14 @@ def test_merge_handles_empty_passes():
     assert result.raw_analysis["analysis_mode"] == "two_pass"
 
 
-def test_merge_drops_non_list_hook_mutations():
-    pass2 = {**PASS2_GOOD, "hook_mutations": "definitely not a list"}
+def test_merge_drops_non_list_concepts_and_mutations():
+    """If neither creative_hook_concepts nor legacy hook_mutations is a
+    list, the merged hook_mutations is empty (no crash)."""
+    pass2 = {
+        k: v for k, v in PASS2_GOOD.items() if k != "creative_hook_concepts"
+    }
+    pass2["creative_hook_concepts"] = "not a list"
+    pass2["hook_mutations"] = "also not a list"
     result = A.build_two_pass_analysis_result(PASS1_GOOD, pass2)
     assert result.hook_mutations == []
 

@@ -144,24 +144,97 @@ PASS2_OLIVER_GOOD = {
         "dragon lamp and throws it on the floor, where it is smashed; the "
         "mechanic is public disrespect + underdog maker triggering viewer defense."
     ),
-    "emotional_mechanic": "public disrespect + underdog maker (viewer-defense instinct)",
+    "viral_mechanic": "public disrespect + underdog maker (viewer-defense instinct)",
+    "scroll_stop_reason": "physical destruction of a small maker's work is an instant moral violation",
     "viewer_role": "defender",
-    "emotions_triggered": ["anger", "protectiveness", "sympathy"],
-    "why_it_works": "viewer wants to step in and protect a small handmade seller",
-    "cooked_parts_to_avoid": ["overly staged 'random stranger' framing"],
-    "product_attachability_score": 0.78,
+    "comment_trigger": "viewer wants to verbally retaliate against the antagonist",
+    "share_trigger": "send-to-friend for shared sense of injustice",
+    "emotional_pressure": "feeling that scrolling away is 'letting this stand'",
+    "emotional_mechanic": "public disrespect + underdog maker (viewer-defense instinct)",
+    "emotions_triggered": ["anger", "protectiveness", "indignation"],
+    "why_it_works": "moral violation against an underdog self-casts the viewer as defender",
+    "cooked_elements": ["please-be-honest framing", "staged-stranger trope"],
+    "cooked_parts_to_avoid": ["please be honest"],
+    "freshness_angle": "physical-destruction tier of public-doubt, not mere insult",
+    "scroll_stop_strength_score": 0.86,
+    "comment_likelihood_score": 0.81,
+    "share_likelihood_score": 0.72,
+    "viewer_role_strength_score": 0.83,
+    "creative_transfer_potential_score": 0.74,
+    "virality_capability_score": 0.79,
+    "product_attachability_score": 0.62,
     "transferability_score": 0.66,
     "freshness_score": 0.71,
     "cooked_score": 0.34,
-    "overall_opportunity_score": 0.74,
-    "hook_mutations": [
-        {"type": "safe", "idea": "Customer haggles aggressively over a handmade memorial portrait",
-         "opening_scene": "wide stall shot, memorial portraits on easels",
-         "onscreen_text": "she just asked me to do this for free",
-         "product_niche_fit": "handmade memorial portraits / market stall",
-         "why_it_might_work": "indignation engine; defender role",
-         "cringe_or_cooked_risk": "tips into staged territory if acting is bad",
-         "production_difficulty": "easy"},
+    "overall_opportunity_score": 0.78,
+    "creative_hook_concepts": [
+        # 2 same_mechanic
+        {"creative_distance": "same_mechanic", "concept_name": "Silent Proof After Insult",
+         "first_2_seconds": "dismissive comment overlay, then maker silently rotates one finished piece to show obscene detail",
+         "emotional_trigger": "vindication", "viewer_role": "jury",
+         "why_it_could_go_viral": "viewer renders a verdict against the heckler",
+         "what_to_avoid": "narration; let silence do the work",
+         "believability_risk": "feels staged if comment overlay reads written by creator",
+         "cooked_risk": "silent-reveal format is widely used; the proof must be very sharp"},
+        {"creative_distance": "same_mechanic", "concept_name": "Wrong Audience",
+         "first_2_seconds": "stranger calls a finished piece 'weird', text immediately names the tribe that would defend it",
+         "emotional_trigger": "tribal recognition",
+         "viewer_role": "tribe member",
+         "why_it_could_go_viral": "viewers self-identify as the tribe and defend",
+         "what_to_avoid": "naming a tribe so niche the average viewer can't claim it",
+         "believability_risk": "passes if the tribe label is real and specific",
+         "cooked_risk": "'POV: when X says Y' framing is cooked"},
+        # 3 adjacent_leap
+        {"creative_distance": "adjacent_leap", "concept_name": "Almost Gave Up",
+         "first_2_seconds": "open mic / pop-up scene, performer starts packing up after being ignored, then one person notices",
+         "emotional_trigger": "second-hand-pride",
+         "viewer_role": "rescuer",
+         "why_it_could_go_viral": "viewer is positioned as one of the people who could 'save' the moment",
+         "what_to_avoid": "telegraphing the 'almost gave up' in the caption",
+         "believability_risk": "fails if the timing of the rescue is too clean",
+         "cooked_risk": "narrated 'sad creator' beats are cooked; let it be silent"},
+        {"creative_distance": "adjacent_leap", "concept_name": "Hidden Emotional Value",
+         "first_2_seconds": "stranger says 'I don't get it', then text reveals the deeply personal reason it was made",
+         "emotional_trigger": "indignation flipping to recognition",
+         "viewer_role": "defender",
+         "why_it_could_go_viral": "the reveal punishes the dismissal",
+         "what_to_avoid": "manipulative grief-bait phrasing",
+         "believability_risk": "feels exploitative if the reveal is too sentimental",
+         "cooked_risk": "memorial reveals are cooked; the framing must be cleaner than 'this was for my X'"},
+        {"creative_distance": "adjacent_leap", "concept_name": "Wrong Person Rejects It",
+         "first_2_seconds": "passerby loudly dismisses the work, viewer immediately understands they were never the target",
+         "emotional_trigger": "insider recognition",
+         "viewer_role": "insider",
+         "why_it_could_go_viral": "comments fill with the actual target audience self-identifying",
+         "what_to_avoid": "telling the viewer who the target is; let them notice",
+         "believability_risk": "the dismisser must look like a real wrong audience, not a strawman",
+         "cooked_risk": "low; the 'wrong-audience' framing is underused"},
+        # 2 big_swing
+        {"creative_distance": "big_swing", "concept_name": "Public Doubt / Private Effort",
+         "first_2_seconds": "loud public rejection in one shot, hard cut to long private workshop tape with no narration",
+         "emotional_trigger": "felt injustice",
+         "viewer_role": "jury",
+         "why_it_could_go_viral": "the asymmetry between the dismissal and the effort is the punchline",
+         "what_to_avoid": "voiceover; let the cut do it",
+         "believability_risk": "needs real workshop footage; staged proof kills it",
+         "cooked_risk": "before/after montages are widely cooked; this must feel raw"},
+        {"creative_distance": "big_swing", "concept_name": "Community Rescue",
+         "first_2_seconds": "creator visibly closing up early, then one stranger stops, then the camera pans to a few people gathering",
+         "emotional_trigger": "second-hand pride",
+         "viewer_role": "rescuer",
+         "why_it_could_go_viral": "viewer self-casts as one of the rescuers; high share for 'we saved this'",
+         "what_to_avoid": "engineered crowd shots; one or two real people land harder than a fake throng",
+         "believability_risk": "easily reads as staged if the timing is too neat",
+         "cooked_risk": "'almost gave up' adjacent format risk; pivot the reveal to community, not creator"},
+        # 1 wildcard
+        {"creative_distance": "wildcard", "concept_name": "Receipt of Rudeness",
+         "first_2_seconds": "creator silently holds up a printed screenshot of a rude DM next to the actual finished piece",
+         "emotional_trigger": "vindication via evidence",
+         "viewer_role": "jury",
+         "why_it_could_go_viral": "the physical receipt format is rare and tactile",
+         "what_to_avoid": "blurring the screenshot too aggressively; readability matters",
+         "believability_risk": "fails if the DM is obviously fabricated",
+         "cooked_risk": "screenshot-reveal posts are common; the physical-printout angle is what carries it"},
     ],
 }
 
@@ -279,10 +352,22 @@ def test_full_two_pass_auto_evaluates_oliver_and_passes(mock_infrastructure, mon
     row = get_report(tmp_path / "emotion_radar.db", rid)
     assert row["emotional_mechanic"].startswith("public disrespect")
     assert row["onscreen_text"] == "Please be honest, how are they?"
-    assert row["overall_opportunity_score"] == 0.74
+    assert row["overall_opportunity_score"] == 0.78
     assert isinstance(row["raw_analysis"], dict)
     assert row["raw_analysis"]["analysis_mode"] == "two_pass"
     assert row["raw_analysis"]["visual_event_pass"]["conflict_type"] == "smash"
+    # Phase 4: new viral-focused fields ride in raw_analysis.
+    hsp = row["raw_analysis"]["hook_strategy_pass"]
+    assert hsp["viral_mechanic"].startswith("public disrespect")
+    assert hsp["scroll_stop_reason"]
+    assert hsp["comment_trigger"]
+    assert hsp["share_trigger"]
+    assert hsp["scroll_stop_strength_score"] == 0.86
+    assert hsp["virality_capability_score"] == 0.79
+    # hook_mutations is sourced from creative_hook_concepts (8 items: 2/3/2/1).
+    assert len(row["hook_mutations"]) == 8
+    by_dist = {c["creative_distance"] for c in row["hook_mutations"]}
+    assert by_dist == {"same_mechanic", "adjacent_leap", "big_swing", "wildcard"}
 
 
 # ---- analyze-link: failed calibration ------------------------------------
@@ -393,29 +478,75 @@ def test_unknown_video_id_no_auto_evaluation(mock_infrastructure, monkeypatch, t
 
 # ---- analyze-link: final summary structure --------------------------------
 
-def test_final_summary_groups_mutations_by_type(mock_infrastructure, monkeypatch, tmp_path: Path):
-    pass2 = {
-        **PASS2_OLIVER_GOOD,
-        "hook_mutations": [
-            {"type": "safe", "idea": "Safe idea A"},
-            {"type": "safe", "idea": "Safe idea B"},
-            {"type": "fresh", "idea": "Fresh idea A"},
-            {"type": "fresh", "idea": "Fresh idea B"},
-            {"type": "fresh", "idea": "Fresh idea C"},
-            {"type": "big_swing", "idea": "Big swing idea"},
-        ],
-    }
+def test_final_summary_groups_concepts_by_creative_distance(mock_infrastructure, monkeypatch, tmp_path: Path):
+    """Phase 4: concepts are grouped by creative_distance, not by legacy
+    'type'. Quota is exactly 8: 2 same_mechanic, 3 adjacent_leap,
+    2 big_swing, 1 wildcard."""
     _patch_providers(
         monkeypatch,
         pass1_text=json.dumps(PASS1_OLIVER_GOOD),
-        pass2_text=json.dumps(pass2),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
     )
     result = _invoke(tmp_path, "analyze-link", OLIVER_URL, "--skip-evaluation")
     assert result.exit_code == 0, result.output
     # Each group label shows up with its count.
-    assert "-- Safe (2) --" in result.output
-    assert "-- Fresh (3) --" in result.output
-    assert "-- Big Swing (1) --" in result.output
+    assert "-- Same Mechanic (2) --" in result.output
+    assert "-- Adjacent Leap (3) --" in result.output
+    assert "-- Big Swing (2) --" in result.output
+    assert "-- Wildcard (1) --" in result.output
+
+
+def test_final_summary_prints_viral_mechanic_sections(mock_infrastructure, monkeypatch, tmp_path: Path):
+    """Phase 4: the new summary headers must appear."""
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    result = _invoke(tmp_path, "analyze-link", OLIVER_URL, "--skip-evaluation")
+    assert result.exit_code == 0, result.output
+    assert "Viral Mechanic Analysis" in result.output
+    assert "Virality Scores" in result.output
+    assert "Broad Hook Concepts" in result.output
+    # Specific lines.
+    assert "Viral Mechanic:" in result.output
+    assert "Why Stops Scroll:" in result.output
+    assert "Comment Trigger:" in result.output
+    assert "Share Trigger:" in result.output
+    assert "Scroll-stop strength:" in result.output
+    assert "Comment likelihood:" in result.output
+    assert "Share likelihood:" in result.output
+    assert "Virality capability:" in result.output
+    # Concept name from PASS2_OLIVER_GOOD shows up under its group.
+    assert "Silent Proof After Insult" in result.output
+
+
+def test_final_summary_renders_legacy_hook_mutations_without_creative_distance(
+    mock_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Back-compat: if Pass 2 still emits the Phase-3 hook_mutations
+    shape (type + idea), the printer renders them in an 'Other' bucket
+    rather than crashing."""
+    legacy_pass2 = {
+        k: v for k, v in PASS2_OLIVER_GOOD.items() if k != "creative_hook_concepts"
+    }
+    legacy_pass2["hook_mutations"] = [
+        {"type": "safe", "idea": "Legacy safe idea"},
+        {"type": "fresh", "idea": "Legacy fresh idea"},
+    ]
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(legacy_pass2),
+    )
+    result = _invoke(tmp_path, "analyze-link", OLIVER_URL, "--skip-evaluation")
+    assert result.exit_code == 0, result.output
+    # All four canonical buckets render even when empty.
+    assert "-- Same Mechanic (0) --" in result.output
+    assert "-- Wildcard (0) --" in result.output
+    # The legacy items land in the "Other" / unrecognised bucket.
+    assert "Other (" in result.output
+    assert "Legacy safe idea" in result.output
 
 
 # ---- known fixture path sanity --------------------------------------------
