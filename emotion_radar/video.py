@@ -31,12 +31,31 @@ class VideoError(RuntimeError):
     pass
 
 
-def download_video(url: str, out_dir: Path, video_id: str, timeout: int = 120) -> Path:
-    """Stream the MP4 to disk. Apify's hosted MP4 URLs are HTTPS direct
-    downloads, no special headers required."""
+DEFAULT_USER_AGENT = (
+    "emotion-radar/0.1 (+https://github.com/lennon090207-gif/emotion-radar)"
+)
+
+
+def download_video(
+    url: str,
+    out_dir: Path,
+    video_id: str,
+    timeout: int = 120,
+    headers: dict[str, str] | None = None,
+) -> Path:
+    """Stream the MP4 to disk.
+
+    Apify key-value-store video URLs (api.apify.com/...) require the
+    Authorization header even though they look like direct downloads.
+    Pass `headers={"Authorization": f"Bearer {token}"}` from the caller
+    for those. A default User-Agent is always sent; caller-provided
+    headers override/extend it."""
     out_dir.mkdir(parents=True, exist_ok=True)
     out_path = out_dir / f"{video_id}.mp4"
-    with requests.get(url, stream=True, timeout=timeout) as r:
+    request_headers: dict[str, str] = {"User-Agent": DEFAULT_USER_AGENT}
+    if headers:
+        request_headers.update(headers)
+    with requests.get(url, stream=True, timeout=timeout, headers=request_headers) as r:
         if not r.ok:
             raise VideoError(f"Failed to download video {url}: HTTP {r.status_code}")
         with out_path.open("wb") as fh:

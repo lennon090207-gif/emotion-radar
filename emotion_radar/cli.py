@@ -71,6 +71,7 @@ def _process_one(
     paths,
     run_info,
     keep_temp: bool,
+    apify_token: str | None = None,
 ) -> dict[str, Any]:
     """Process a single normalized item through download → frames →
     contact sheet → analysis stub → report dict. Errors in any step are
@@ -97,16 +98,25 @@ def _process_one(
     }
     if item.error:
         return report
+    if not item.video_download_url:
+        report["error"] = "No video_download_url on normalized item."
+        return report
 
     video_id = item.video_id or "unknown"
     video_path: Path | None = None
     frames_dir = paths.tmp_frames_dir / video_id
+    # Apify key-value-store URLs need the Authorization header; public CDN
+    # URLs (rare path) do not. Send the bearer only for api.apify.com hosts.
+    dl_headers: dict[str, str] | None = None
+    if apify_token and "api.apify.com" in item.video_download_url:
+        dl_headers = {"Authorization": f"Bearer {apify_token}"}
     try:
         click.echo(f"  → downloading video for {video_id} ...")
         video_path = download_video(
             item.video_download_url,
             paths.tmp_videos_dir,
             video_id,
+            headers=dl_headers,
         )
         click.echo(f"  → extracting frames at {list(FRAME_TIMESTAMPS_SEC)}s ...")
         frame_paths = extract_frames(video_path, frames_dir, FRAME_TIMESTAMPS_SEC)
@@ -174,7 +184,9 @@ def _run_pipeline(
     report_ids: list[str] = []
     for i, item in enumerate(items, start=1):
         click.echo(f"[{i}/{len(items)}] {item.submitted_url}")
-        report = _process_one(item, paths, run_info, keep_temp=keep_temp)
+        report = _process_one(
+            item, paths, run_info, keep_temp=keep_temp, apify_token=token,
+        )
         rid = insert_report(paths.db_path, report)
         report_ids.append(rid)
         if report.get("error"):
