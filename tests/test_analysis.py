@@ -239,6 +239,126 @@ def test_pass2_prompt_lists_virality_focused_scores():
         assert score in sp, f"virality score missing in Pass 2 prompt: {score}"
 
 
+# --- Phase 5: Story Flow Library, Variations, Pioneer Concepts -------------
+
+def test_pass2_prompt_includes_all_eight_story_flow_names():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    expected_names = (
+        "Public Disrespect -> Viewer Defense",
+        "Family Protection -> Validation",
+        "Moral Pressure -> Tiny Rescue Action",
+        "Comment Humiliation -> Public Witness",
+        "Stall Vulnerability -> Social Judgment",
+        "Wrong Audience -> Right Tribe",
+        "Shock Problem -> Immediate Fix",
+        "Ethical Edge Vulnerability -> Sympathy Surge",
+    )
+    for name in expected_names:
+        assert name in sp, f"story flow name missing in prompt: {name}"
+
+
+def test_pass2_prompt_includes_all_eight_story_flow_ids():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    expected_ids = (
+        "public_disrespect_viewer_defense",
+        "family_protection_validation",
+        "moral_pressure_tiny_rescue",
+        "comment_humiliation_public_witness",
+        "stall_vulnerability_social_judgment",
+        "wrong_audience_right_tribe",
+        "shock_problem_immediate_fix",
+        "ethical_edge_vulnerability_sympathy_surge",
+    )
+    for fid in expected_ids:
+        assert fid in sp, f"story flow id missing in prompt: {fid}"
+
+
+def test_pass2_prompt_variation_quota_exactly_5():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    assert "Variations (EXACTLY 5)" in sp
+
+
+def test_pass2_prompt_pioneer_quota_exactly_5():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    # Either phrasing of "5 pioneer concepts" should be present.
+    assert "Pioneer concepts (EXACTLY 5)" in sp
+
+
+def test_pass2_prompt_lists_variation_required_fields():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    for fld in (
+        "story_flow_id",
+        "what_is_new",
+        "what_is_cooked_to_avoid",
+        "believability_risk",
+    ):
+        assert fld in sp, f"variation field missing in Pass 2 prompt: {fld}"
+
+
+def test_pass2_prompt_lists_pioneer_required_fields():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    for fld in (
+        "inspired_by_story_flow_id",
+        "emotional_physics",
+        "why_it_is_not_a_direct_copy",
+        "why_it_could_be_breakout",
+        "viewer_comment_impulse",
+        "ethical_or_cringe_risk",
+    ):
+        assert fld in sp, f"pioneer field missing in Pass 2 prompt: {fld}"
+
+
+def test_pass2_prompt_lists_phase5_scoring_fields():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    for score in (
+        "story_flow_strength_score",
+        "novelty_beyond_baseline_score",
+        "ethical_risk_score",
+        "cringe_risk_score",
+        "breakout_potential_score",
+    ):
+        assert score in sp, f"Phase 5 score missing in Pass 2 prompt: {score}"
+
+
+def test_pass2_prompt_mentions_ethical_risk_for_ethical_edge_flow():
+    """The ethical-edge-vulnerability flow must be specifically tied to
+    a high ethical_risk_score in the prompt — that's how the model
+    knows to flag the high-virality / high-risk hooks."""
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT.lower()
+    assert "ethical_risk_score" in sp
+    assert "ethical edge vulnerability" in sp
+    # Floor guidance present.
+    assert ">= 0.7" in sp or "ethical_risk_default" in sp
+
+
+def test_pass2_prompt_includes_pioneer_primary_goal_phrasing():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    assert "PRIMARY GOAL" in sp or "primary goal" in sp.lower()
+
+
+def test_pass2_prompt_schema_includes_phase5_keys():
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    for key in (
+        "matched_story_flows",
+        "dominant_story_flow",
+        "story_flow_steps_observed",
+        "variations",
+        "pioneer_concepts",
+    ):
+        assert key in sp, f"Phase 5 schema key missing in prompt: {key}"
+
+
+def test_pass2_prompt_assembly_failure_modes_explicit():
+    """The assembly helper raises if either anchor is missing. This
+    test is a smoke check that the helper exists and is callable."""
+    s = A._assemble_hook_strategy_prompt()
+    assert isinstance(s, str)
+    assert len(s) > 5000  # the assembled prompt should be substantially larger than the base
+    # Story flow library content must have landed in the output.
+    assert "public_disrespect_viewer_defense" in s
+    assert "story_flow_strength_score" in s
+
+
 def test_pass2_prompt_lists_cooked_phrases_to_avoid():
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
     for cooked in (

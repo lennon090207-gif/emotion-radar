@@ -125,6 +125,112 @@ PASS2_GOOD = {
             "cooked_risk": "silent-reveal format is widely used; the proof must be sharp",
         }
     ],
+    # Phase 5 additions
+    "matched_story_flows": [
+        {
+            "id": "public_disrespect_viewer_defense",
+            "name": "Public Disrespect -> Viewer Defense",
+            "confidence": 0.92,
+            "why_matched": "stranger physically destroys handmade item at a market stall",
+        },
+        {
+            "id": "stall_vulnerability_social_judgment",
+            "name": "Stall Vulnerability -> Social Judgment",
+            "confidence": 0.71,
+            "why_matched": "market stall display in plain view sets up public-judgment context",
+        },
+    ],
+    "dominant_story_flow": "public_disrespect_viewer_defense",
+    "story_flow_steps_observed": [
+        "stranger approaches the market stall",
+        "stranger handles and destroys the handmade lamp",
+        "maker visibly absorbs the disrespect",
+        "viewer is positioned as defender",
+    ],
+    "story_flow_strength_score": 0.9,
+    "novelty_beyond_baseline_score": 0.45,
+    "ethical_risk_score": 0.3,
+    "cringe_risk_score": 0.35,
+    "breakout_potential_score": 0.72,
+    "variations": [
+        {"concept_name": "Receipt of Cruelty", "story_flow_id": "public_disrespect_viewer_defense",
+         "first_2_seconds": "maker silently holds up a printed screenshot of a rude DM next to the finished piece at the stall",
+         "emotional_trigger": "vindication", "viewer_role": "jury",
+         "why_it_could_go_viral": "physical receipt format is rare and tactile",
+         "what_is_new": "the printed-screenshot prop instead of a verbal exchange",
+         "what_is_cooked_to_avoid": "do not use 'please be honest' wording",
+         "believability_risk": "fabricated-screenshot reads kill it if the DM is too on-the-nose"},
+        {"concept_name": "Walked-Past Verdict", "story_flow_id": "public_disrespect_viewer_defense",
+         "first_2_seconds": "wide shot of stall; a couple stops, picks the piece up, makes a face, sets it down hard, walks off",
+         "emotional_trigger": "second-hand indignation", "viewer_role": "defender",
+         "why_it_could_go_viral": "the put-down beat is silent and damning",
+         "what_is_new": "no spoken comment, no overlay — body language carries the disrespect",
+         "what_is_cooked_to_avoid": "do not zoom in on a sad reaction shot",
+         "believability_risk": "needs real candid timing; staged passerby kills it"},
+        {"concept_name": "Tribe Snap-Defense", "story_flow_id": "wrong_audience_right_tribe",
+         "first_2_seconds": "stall passerby calls the work weird; text immediately names the tribe that would defend it",
+         "emotional_trigger": "identity claim", "viewer_role": "tribe member",
+         "why_it_could_go_viral": "comments fill with the tribe self-identifying",
+         "what_is_new": "the tribe is named within the first 2 seconds, not the punchline",
+         "what_is_cooked_to_avoid": "POV-when-X-says-Y framing is cooked",
+         "believability_risk": "tribe label must be claimable, not too niche"},
+        {"concept_name": "Almost-Closed Save", "story_flow_id": "stall_vulnerability_social_judgment",
+         "first_2_seconds": "maker starts packing up after a quiet day; one stranger stops",
+         "emotional_trigger": "second-hand-pride", "viewer_role": "rescuer",
+         "why_it_could_go_viral": "viewer is positioned as one of the people who could save the moment",
+         "what_is_new": "no caption tells the story; the pack-up beat is silent",
+         "what_is_cooked_to_avoid": "narrated 'sad creator' captions are cooked",
+         "believability_risk": "fails if the rescue timing is too clean"},
+        {"concept_name": "Comment Card on the Table", "story_flow_id": "stall_vulnerability_social_judgment",
+         "first_2_seconds": "a handwritten note on the stall reads a real rude comment from a previous day",
+         "emotional_trigger": "moral outrage", "viewer_role": "appreciator",
+         "why_it_could_go_viral": "the physical note format collapses time and creates witness role",
+         "what_is_new": "asynchronous evidence rather than live confrontation",
+         "what_is_cooked_to_avoid": "do not over-handwrite the note; let it look authentic",
+         "believability_risk": "feels manipulative if the comment is too perfect"},
+    ],
+    "pioneer_concepts": [
+        {"concept_name": "Receipt Wall",
+         "inspired_by_story_flow_id": "comment_humiliation_public_witness",
+         "first_2_seconds": "creator silently pins printed rude DMs to a corkboard behind the work; one tap, no narration",
+         "emotional_physics": "physical, tactile evidence of cruelty against the maker; viewers become jurors",
+         "why_it_is_not_a_direct_copy": "no creator-reaction shot, no read-aloud; the wall itself is the indictment",
+         "why_it_could_be_breakout": "tactile-evidence formats are underused; the prop is the hook",
+         "viewer_comment_impulse": "urge to add their own receipt or to defend",
+         "ethical_or_cringe_risk": "real names must be redacted; otherwise high cringe + brand risk"},
+        {"concept_name": "Bystander Camera",
+         "inspired_by_story_flow_id": "public_disrespect_viewer_defense",
+         "first_2_seconds": "filmed from a stranger's POV in line behind the rude customer; the maker is barely visible",
+         "emotional_physics": "third-person witnessing accelerates the defender response",
+         "why_it_is_not_a_direct_copy": "the maker is NOT the protagonist of the frame; the bystander is",
+         "why_it_could_be_breakout": "POV inversion makes the viewer feel they were there",
+         "viewer_comment_impulse": "urge to roleplay 'what I would have said'",
+         "ethical_or_cringe_risk": "low if the framing reads candid, high if it reads staged"},
+        {"concept_name": "Quiet Apology",
+         "inspired_by_story_flow_id": "wrong_audience_right_tribe",
+         "first_2_seconds": "a passerby comes back to the stall the next day and quietly apologises for their reaction yesterday",
+         "emotional_physics": "delayed-justice loop; tribe sees the antagonist redeemed",
+         "why_it_is_not_a_direct_copy": "the antagonist becomes the hero; no defender role for the viewer at all",
+         "why_it_could_be_breakout": "redemption arcs in 1-2s are rare; high share for 'restored faith'",
+         "viewer_comment_impulse": "urge to share to someone who needs faith restored",
+         "ethical_or_cringe_risk": "feels manipulative if the apology is read off a script"},
+        {"concept_name": "Stranger's Note",
+         "inspired_by_story_flow_id": "stall_vulnerability_social_judgment",
+         "first_2_seconds": "maker finds a handwritten note tucked under one of the pieces at the stall",
+         "emotional_physics": "anonymous appreciation breaks the public-judgment frame",
+         "why_it_is_not_a_direct_copy": "no insult, no destruction — the hook is a positive intervention witnessed in silence",
+         "why_it_could_be_breakout": "appreciation-witnessed-in-silence is underused; pairs with the comment_humiliation flow as a polarity flip",
+         "viewer_comment_impulse": "urge to claim 'I would have written this'",
+         "ethical_or_cringe_risk": "fails if the note is too sentimental"},
+        {"concept_name": "Last Item Standing",
+         "inspired_by_story_flow_id": "moral_pressure_tiny_rescue",
+         "first_2_seconds": "wide shot of the stall with one piece left at end-of-day; maker reaches to pack it",
+         "emotional_physics": "scarcity + moral pressure to be the one who saved the last piece",
+         "why_it_is_not_a_direct_copy": "no plea, no caption, no 'please don't scroll'; only the visual stake",
+         "why_it_could_be_breakout": "tactile, time-pressured rescue framing without the cooked phrasing",
+         "viewer_comment_impulse": "urge to ask 'is it still available?'",
+         "ethical_or_cringe_risk": "feels staged if the stall is suspiciously well-lit; low otherwise"},
+    ],
 }
 
 
@@ -363,6 +469,54 @@ def test_repair_off_when_repair_provider_is_None(tmp_path: Path):
     raw = "still not json"
     with pytest.raises(ValueError):
         A._parse_or_repair(raw, repair_provider=None)
+
+
+# ============================================================================
+# Phase 5: Story flow fields survive through merge
+# ============================================================================
+
+def test_merge_preserves_matched_story_flows_in_raw_analysis():
+    result = A.build_two_pass_analysis_result(PASS1_GOOD, PASS2_GOOD)
+    hsp = result.raw_analysis["hook_strategy_pass"]
+    assert hsp["dominant_story_flow"] == "public_disrespect_viewer_defense"
+    matched = hsp["matched_story_flows"]
+    assert isinstance(matched, list) and len(matched) == 2
+    ids = {m["id"] for m in matched if isinstance(m, dict)}
+    assert "public_disrespect_viewer_defense" in ids
+
+
+def test_merge_preserves_variations_quota_5():
+    result = A.build_two_pass_analysis_result(PASS1_GOOD, PASS2_GOOD)
+    variations = result.raw_analysis["hook_strategy_pass"]["variations"]
+    assert isinstance(variations, list)
+    assert len(variations) == 5
+    # Every variation references a story_flow_id.
+    for v in variations:
+        assert v.get("story_flow_id"), f"variation missing story_flow_id: {v}"
+
+
+def test_merge_preserves_pioneer_concepts_quota_5():
+    result = A.build_two_pass_analysis_result(PASS1_GOOD, PASS2_GOOD)
+    pioneers = result.raw_analysis["hook_strategy_pass"]["pioneer_concepts"]
+    assert isinstance(pioneers, list)
+    assert len(pioneers) == 5
+    for p in pioneers:
+        assert p.get("inspired_by_story_flow_id"), f"pioneer missing inspired_by_story_flow_id: {p}"
+        assert p.get("concept_name"), f"pioneer missing concept_name: {p}"
+
+
+def test_merge_preserves_phase5_scores():
+    result = A.build_two_pass_analysis_result(PASS1_GOOD, PASS2_GOOD)
+    hsp = result.raw_analysis["hook_strategy_pass"]
+    for key in (
+        "story_flow_strength_score",
+        "novelty_beyond_baseline_score",
+        "ethical_risk_score",
+        "cringe_risk_score",
+        "breakout_potential_score",
+    ):
+        assert key in hsp, f"Phase 5 score missing after merge: {key}"
+        assert 0.0 <= hsp[key] <= 1.0
 
 
 def test_analyze_two_pass_uses_strategy_provider_as_repair_target(tmp_path: Path):

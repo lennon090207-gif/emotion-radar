@@ -563,6 +563,86 @@ def _print_final_report(report: dict[str, Any]) -> None:
             label = m.get("concept_name") or m.get("idea") or "(no name)"
             click.echo(f"    [{t}] {label}")
 
+    # ----- Phase 5: Story Flow Match -----
+    matched = hsp.get("matched_story_flows") if isinstance(hsp.get("matched_story_flows"), list) else []
+    dominant = hsp.get("dominant_story_flow")
+    observed_steps = hsp.get("story_flow_steps_observed") if isinstance(hsp.get("story_flow_steps_observed"), list) else []
+    click.echo("\nStory Flow Match")
+    click.echo("-" * 60)
+    click.echo(f"  Dominant flow:        {dominant or '—'}")
+    if matched:
+        click.echo(f"  Matched flows ({len(matched)}):")
+        for m in matched:
+            if not isinstance(m, dict):
+                continue
+            conf = m.get("confidence")
+            conf_str = f"{conf:.2f}" if isinstance(conf, (int, float)) else "—"
+            click.echo(f"    - {m.get('id') or '?'} ({conf_str}): {m.get('why_matched') or ''}")
+    else:
+        click.echo("  Matched flows:        (none)")
+    if observed_steps:
+        click.echo("  Steps observed in source:")
+        for step in observed_steps:
+            click.echo(f"    * {step}")
+    click.echo("\n  Phase 5 scores")
+    click.echo(f"    Story-flow strength:        {_fmt_score(hsp.get('story_flow_strength_score'))}")
+    click.echo(f"    Novelty beyond baseline:    {_fmt_score(hsp.get('novelty_beyond_baseline_score'))}")
+    click.echo(f"    Ethical risk:               {_fmt_score(hsp.get('ethical_risk_score'))}")
+    click.echo(f"    Cringe risk:                {_fmt_score(hsp.get('cringe_risk_score'))}")
+    click.echo(f"    Breakout potential:         {_fmt_score(hsp.get('breakout_potential_score'))}")
+
+    # ----- Phase 5: Variations -----
+    variations = hsp.get("variations") if isinstance(hsp.get("variations"), list) else []
+    click.echo(f"\nVariations ({len(variations)})")
+    click.echo("-" * 60)
+    if not variations:
+        click.echo("  (none)")
+    for i, v in enumerate(variations, start=1):
+        if not isinstance(v, dict):
+            continue
+        click.echo(f"  {i}. {v.get('concept_name') or '(no name)'}  [flow: {v.get('story_flow_id') or '?'}]")
+        if v.get("first_2_seconds"):
+            click.echo(f"     first 2 seconds:        {v['first_2_seconds']}")
+        if v.get("emotional_trigger"):
+            click.echo(f"     emotional trigger:      {v['emotional_trigger']}")
+        if v.get("viewer_role"):
+            click.echo(f"     viewer role:            {v['viewer_role']}")
+        if v.get("why_it_could_go_viral"):
+            click.echo(f"     why viral:              {v['why_it_could_go_viral']}")
+        if v.get("what_is_new"):
+            click.echo(f"     what is new:            {v['what_is_new']}")
+        if v.get("what_is_cooked_to_avoid"):
+            click.echo(f"     cooked to avoid:        {v['what_is_cooked_to_avoid']}")
+        if v.get("believability_risk"):
+            click.echo(f"     believability risk:     {v['believability_risk']}")
+
+    # ----- Phase 5: Pioneer Concepts (prominent — this is the user's goal) -----
+    pioneers = hsp.get("pioneer_concepts") if isinstance(hsp.get("pioneer_concepts"), list) else []
+    click.echo("\n" + ("=" * 60))
+    click.echo(f"PIONEER CONCEPTS  ({len(pioneers)})")
+    click.echo("=" * 60)
+    if not pioneers:
+        click.echo("  (none)")
+    for i, p in enumerate(pioneers, start=1):
+        if not isinstance(p, dict):
+            continue
+        click.echo(
+            f"\n  [{i}] {p.get('concept_name') or '(no name)'}"
+            f"   (inspired by: {p.get('inspired_by_story_flow_id') or '?'})"
+        )
+        if p.get("first_2_seconds"):
+            click.echo(f"      first 2 seconds:           {p['first_2_seconds']}")
+        if p.get("emotional_physics"):
+            click.echo(f"      emotional physics:         {p['emotional_physics']}")
+        if p.get("why_it_is_not_a_direct_copy"):
+            click.echo(f"      not a direct copy:         {p['why_it_is_not_a_direct_copy']}")
+        if p.get("why_it_could_be_breakout"):
+            click.echo(f"      why it could be breakout:  {p['why_it_could_be_breakout']}")
+        if p.get("viewer_comment_impulse"):
+            click.echo(f"      viewer comment impulse:    {p['viewer_comment_impulse']}")
+        if p.get("ethical_or_cringe_risk"):
+            click.echo(f"      ethical / cringe risk:     {p['ethical_or_cringe_risk']}")
+
 
 def _print_evaluation(
     result: EvaluationResult,

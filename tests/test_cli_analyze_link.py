@@ -236,6 +236,108 @@ PASS2_OLIVER_GOOD = {
          "believability_risk": "fails if the DM is obviously fabricated",
          "cooked_risk": "screenshot-reveal posts are common; the physical-printout angle is what carries it"},
     ],
+    # Phase 5 additions
+    "matched_story_flows": [
+        {"id": "public_disrespect_viewer_defense",
+         "name": "Public Disrespect -> Viewer Defense",
+         "confidence": 0.93,
+         "why_matched": "stranger physically destroys handmade item at a market stall"},
+        {"id": "stall_vulnerability_social_judgment",
+         "name": "Stall Vulnerability -> Social Judgment",
+         "confidence": 0.7,
+         "why_matched": "market stall display in plain view sets up public-judgment context"},
+    ],
+    "dominant_story_flow": "public_disrespect_viewer_defense",
+    "story_flow_steps_observed": [
+        "stranger approaches the market stall",
+        "stranger picks up and destroys the dragon lamp",
+        "maker visibly absorbs the disrespect",
+        "viewer is positioned as defender",
+    ],
+    "story_flow_strength_score": 0.91,
+    "novelty_beyond_baseline_score": 0.42,
+    "ethical_risk_score": 0.28,
+    "cringe_risk_score": 0.35,
+    "breakout_potential_score": 0.74,
+    "variations": [
+        {"concept_name": "Receipt of Cruelty", "story_flow_id": "public_disrespect_viewer_defense",
+         "first_2_seconds": "maker silently holds up a printed screenshot of a rude DM next to the finished piece",
+         "emotional_trigger": "vindication", "viewer_role": "jury",
+         "why_it_could_go_viral": "physical receipt format is rare and tactile",
+         "what_is_new": "the printed-screenshot prop instead of verbal exchange",
+         "what_is_cooked_to_avoid": "do not use 'please be honest'",
+         "believability_risk": "fabricated screenshots kill it if too on-the-nose"},
+        {"concept_name": "Walked-Past Verdict", "story_flow_id": "public_disrespect_viewer_defense",
+         "first_2_seconds": "wide shot of stall; couple stops, picks up the piece, makes a face, sets it down hard, walks off",
+         "emotional_trigger": "second-hand indignation", "viewer_role": "defender",
+         "why_it_could_go_viral": "the put-down beat is silent and damning",
+         "what_is_new": "no spoken comment; body language carries the disrespect",
+         "what_is_cooked_to_avoid": "do not zoom on a sad reaction shot",
+         "believability_risk": "needs candid timing; staged passerby kills it"},
+        {"concept_name": "Tribe Snap-Defense", "story_flow_id": "wrong_audience_right_tribe",
+         "first_2_seconds": "passerby calls the work weird; text immediately names the tribe that would defend it",
+         "emotional_trigger": "identity claim", "viewer_role": "tribe member",
+         "why_it_could_go_viral": "comments fill with the tribe self-identifying",
+         "what_is_new": "tribe is named within first 2 seconds, not the punchline",
+         "what_is_cooked_to_avoid": "POV-when-X-says-Y framing",
+         "believability_risk": "tribe label must be claimable, not too niche"},
+        {"concept_name": "Almost-Closed Save", "story_flow_id": "stall_vulnerability_social_judgment",
+         "first_2_seconds": "maker starts packing up after a quiet day; one stranger stops",
+         "emotional_trigger": "second-hand pride", "viewer_role": "rescuer",
+         "why_it_could_go_viral": "viewer positioned as one of the people who could save the moment",
+         "what_is_new": "no caption tells the story; pack-up beat is silent",
+         "what_is_cooked_to_avoid": "narrated 'sad creator' captions",
+         "believability_risk": "fails if the rescue timing is too clean"},
+        {"concept_name": "Comment Card on the Table", "story_flow_id": "stall_vulnerability_social_judgment",
+         "first_2_seconds": "a handwritten note on the stall reads a real rude comment from a previous day",
+         "emotional_trigger": "moral outrage", "viewer_role": "appreciator",
+         "why_it_could_go_viral": "physical note format collapses time and creates witness role",
+         "what_is_new": "asynchronous evidence rather than live confrontation",
+         "what_is_cooked_to_avoid": "don't over-handwrite; keep authentic",
+         "believability_risk": "feels manipulative if the comment is too perfect"},
+    ],
+    "pioneer_concepts": [
+        {"concept_name": "Receipt Wall",
+         "inspired_by_story_flow_id": "comment_humiliation_public_witness",
+         "first_2_seconds": "creator silently pins printed rude DMs to a corkboard behind the work",
+         "emotional_physics": "tactile evidence of cruelty against the maker; viewers become jurors",
+         "why_it_is_not_a_direct_copy": "no creator-reaction shot, no read-aloud; the wall is the indictment",
+         "why_it_could_be_breakout": "tactile-evidence formats are underused; the prop is the hook",
+         "viewer_comment_impulse": "urge to add their own receipt or defend",
+         "ethical_or_cringe_risk": "real names must be redacted; otherwise high brand risk"},
+        {"concept_name": "Bystander Camera",
+         "inspired_by_story_flow_id": "public_disrespect_viewer_defense",
+         "first_2_seconds": "filmed from a stranger's POV in line behind the rude customer",
+         "emotional_physics": "third-person witnessing accelerates the defender response",
+         "why_it_is_not_a_direct_copy": "the maker is not the protagonist of the frame; the bystander is",
+         "why_it_could_be_breakout": "POV inversion makes the viewer feel they were there",
+         "viewer_comment_impulse": "urge to roleplay 'what I would have said'",
+         "ethical_or_cringe_risk": "low if framing reads candid, high if staged"},
+        {"concept_name": "Quiet Apology",
+         "inspired_by_story_flow_id": "wrong_audience_right_tribe",
+         "first_2_seconds": "passerby comes back next day and quietly apologises for their reaction yesterday",
+         "emotional_physics": "delayed-justice loop; tribe sees the antagonist redeemed",
+         "why_it_is_not_a_direct_copy": "antagonist becomes the hero; no defender role for the viewer",
+         "why_it_could_be_breakout": "redemption arcs in 1-2s are rare; high share for restored faith",
+         "viewer_comment_impulse": "urge to share to someone who needs faith restored",
+         "ethical_or_cringe_risk": "feels manipulative if apology reads off a script"},
+        {"concept_name": "Stranger's Note",
+         "inspired_by_story_flow_id": "stall_vulnerability_social_judgment",
+         "first_2_seconds": "maker finds a handwritten note tucked under one of the pieces",
+         "emotional_physics": "anonymous appreciation breaks the public-judgment frame",
+         "why_it_is_not_a_direct_copy": "no insult, no destruction; positive intervention witnessed in silence",
+         "why_it_could_be_breakout": "appreciation-witnessed-in-silence is underused",
+         "viewer_comment_impulse": "urge to claim 'I would have written this'",
+         "ethical_or_cringe_risk": "fails if the note is too sentimental"},
+        {"concept_name": "Last Item Standing",
+         "inspired_by_story_flow_id": "moral_pressure_tiny_rescue",
+         "first_2_seconds": "wide shot of stall with one piece left at end-of-day; maker reaches to pack it",
+         "emotional_physics": "scarcity + moral pressure to be the one who saved the last piece",
+         "why_it_is_not_a_direct_copy": "no plea, no 'please don't scroll'; only the visual stake",
+         "why_it_could_be_breakout": "tactile, time-pressured rescue framing without cooked phrasing",
+         "viewer_comment_impulse": "urge to ask 'is it still available?'",
+         "ethical_or_cringe_risk": "feels staged if stall is suspiciously well-lit"},
+    ],
 }
 
 
@@ -550,6 +652,97 @@ def test_final_summary_renders_legacy_hook_mutations_without_creative_distance(
 
 
 # ---- known fixture path sanity --------------------------------------------
+
+# ============================================================================
+# Phase 5: Story Flow Match / Variations / Pioneer Concepts in final summary
+# ============================================================================
+
+def test_final_summary_prints_story_flow_match_section(mock_infrastructure, monkeypatch, tmp_path: Path):
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    result = _invoke(tmp_path, "analyze-link", OLIVER_URL, "--skip-evaluation")
+    assert result.exit_code == 0, result.output
+    assert "Story Flow Match" in result.output
+    assert "Dominant flow:" in result.output
+    assert "public_disrespect_viewer_defense" in result.output
+    assert "Steps observed in source:" in result.output
+    # Phase 5 scores rendered.
+    assert "Story-flow strength:" in result.output
+    assert "Novelty beyond baseline:" in result.output
+    assert "Ethical risk:" in result.output
+    assert "Cringe risk:" in result.output
+    assert "Breakout potential:" in result.output
+
+
+def test_final_summary_prints_variations_section(mock_infrastructure, monkeypatch, tmp_path: Path):
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    result = _invoke(tmp_path, "analyze-link", OLIVER_URL, "--skip-evaluation")
+    assert result.exit_code == 0, result.output
+    # Header with the exact count.
+    assert "Variations (5)" in result.output
+    # Concept names from PASS2_OLIVER_GOOD's variations land in output.
+    assert "Receipt of Cruelty" in result.output
+    assert "Walked-Past Verdict" in result.output
+    # Per-variation fields are rendered.
+    assert "what is new:" in result.output
+    assert "cooked to avoid:" in result.output
+
+
+def test_final_summary_prints_pioneer_concepts_prominently(mock_infrastructure, monkeypatch, tmp_path: Path):
+    """Pioneer Concepts is the primary goal — it should print with a
+    visually heavier header and full per-concept detail."""
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+    result = _invoke(tmp_path, "analyze-link", OLIVER_URL, "--skip-evaluation")
+    assert result.exit_code == 0, result.output
+    # The prominent header (all-caps + box) appears.
+    assert "PIONEER CONCEPTS  (5)" in result.output
+    # Concept names from the fixture.
+    assert "Receipt Wall" in result.output
+    assert "Bystander Camera" in result.output
+    assert "Stranger's Note" in result.output
+    # Pioneer-specific fields rendered.
+    assert "inspired by:" in result.output
+    assert "why it could be breakout:" in result.output
+    assert "viewer comment impulse:" in result.output
+    assert "ethical / cringe risk:" in result.output
+
+
+def test_final_summary_handles_missing_phase5_fields_gracefully(mock_infrastructure, monkeypatch, tmp_path: Path):
+    """If Pass 2 omits the Phase-5 fields entirely (older models, prompt
+    regression), the printer should render empty sections and exit
+    cleanly — not crash."""
+    pass2 = {
+        k: v for k, v in PASS2_OLIVER_GOOD.items()
+        if k not in (
+            "matched_story_flows", "dominant_story_flow", "story_flow_steps_observed",
+            "story_flow_strength_score", "novelty_beyond_baseline_score",
+            "ethical_risk_score", "cringe_risk_score", "breakout_potential_score",
+            "variations", "pioneer_concepts",
+        )
+    }
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(pass2),
+    )
+    result = _invoke(tmp_path, "analyze-link", OLIVER_URL, "--skip-evaluation")
+    assert result.exit_code == 0, result.output
+    # Sections still render their headers.
+    assert "Story Flow Match" in result.output
+    assert "Variations (0)" in result.output
+    assert "PIONEER CONCEPTS  (0)" in result.output
+
 
 def test_known_fixtures_dict_points_at_existing_file():
     """If someone moves or renames docs/examples/oliver_expected.json,

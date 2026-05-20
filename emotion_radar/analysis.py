@@ -35,6 +35,7 @@ from typing import Any
 
 from .models import AnalysisResult
 from .providers import VisionProvider
+from .story_flows import STORY_FLOWS, render_story_flows_for_prompt
 
 
 # ============================================================================
@@ -135,7 +136,7 @@ def build_visual_event_user_prompt(metadata: dict[str, Any]) -> str:
 # Pass 2 — Hook Strategist
 # ============================================================================
 
-HOOK_STRATEGY_SYSTEM_PROMPT = """You are a senior organic-marketing researcher analyzing the VIRAL MECHANIC of a short-form video. You receive (a) Pass 1's frame-by-frame visual evidence, and (b) the video's metadata. Your job is to identify what makes the hook stop the scroll, and to generate broad creative hook concepts that re-use that mechanic in new emotional situations.
+_BASE_HOOK_STRATEGY_PROMPT = """You are a senior organic-marketing researcher analyzing the VIRAL MECHANIC of a short-form video. You receive (a) Pass 1's frame-by-frame visual evidence, and (b) the video's metadata. Your job is to identify what makes the hook stop the scroll, and to generate broad creative hook concepts that re-use that mechanic in new emotional situations.
 
 This is the STRATEGY pass (Pass 2 of 2). Pass 1's JSON is the evidence layer — ground truth about what physically happens. You do not re-analyze any image.
 
@@ -298,6 +299,152 @@ You MAY mutate these only if you both (a) flag them in `cooked_elements` AND in 
 
 Return STRICT JSON only. No prose outside the JSON object. No markdown fences. No commentary.
 """
+
+
+# ----- Phase 5: Story Flow Library, Variations, Pioneer Concepts -----------
+
+_PHASE5_PROMPT_INSERT = (
+    "# Story Flow Library\n"
+    "\n"
+    "The user has a baseline of dominant viral hooks. You must map the analyzed "
+    "video against this library and produce two additional outputs anchored to "
+    "it: VARIATIONS (fresh mutations of matched flows) and PIONEER_CONCEPTS "
+    "(bigger, newer concepts preserving the same emotional physics).\n"
+    "\n"
+    "The 8 known flows:\n"
+    "\n"
+    + render_story_flows_for_prompt() + "\n"
+    "\n"
+    "# Story flow matching\n"
+    "\n"
+    "Identify which flows the source video matches. Multiple flows can match. "
+    "For each match, give id (must be from the library above), name (must "
+    "match exactly), a confidence in [0, 1], and a one-line `why_matched`. Set "
+    "`dominant_story_flow` to the id of the strongest match, or \"\" if no flow "
+    "cleanly matches. List the steps you actually OBSERVED in the source as "
+    "`story_flow_steps_observed` — these are concrete observations, not the "
+    "library's canonical steps copied verbatim.\n"
+    "\n"
+    "# Variations (EXACTLY 5)\n"
+    "\n"
+    "Variations are fresh mutations of MATCHED flows. They preserve the same "
+    "emotional physics but vary the situation / setting / staging. They are "
+    "NOT direct copies of example labels. They are NOT product swaps.\n"
+    "\n"
+    "Each variation MUST include:\n"
+    "  - concept_name (2-5 words, memorable)\n"
+    "  - story_flow_id (must match a library id)\n"
+    "  - first_2_seconds (concrete scene; specific setting, specific people, specific action)\n"
+    "  - emotional_trigger (specific feeling)\n"
+    "  - viewer_role (specific role)\n"
+    "  - why_it_could_go_viral\n"
+    "  - what_is_new (one line: how this mutation moves beyond known example labels)\n"
+    "  - what_is_cooked_to_avoid (specific cooked elements to NOT touch)\n"
+    "  - believability_risk\n"
+    "\n"
+    "# Pioneer concepts (EXACTLY 5) — THIS IS THE USER'S PRIMARY GOAL\n"
+    "\n"
+    "Pioneer concepts are BIGGER, NEWER. They preserve the same emotional "
+    "physics as one of the library flows, but they introduce an emotional setup "
+    "that does NOT already exist among the example labels. They should feel "
+    "like NEW category-defining concepts, not minor variations.\n"
+    "\n"
+    "A pioneer concept is NOT:\n"
+    "  - a renamed version of a known example label,\n"
+    "  - a product swap of a known example,\n"
+    "  - a setting swap that retains the same setup beats,\n"
+    "  - a minor remix.\n"
+    "\n"
+    "A pioneer concept IS:\n"
+    "  - a new emotional setup that triggers the same viral physics,\n"
+    "  - filmable native to organic feed in 1-2 seconds,\n"
+    "  - believable enough to land for a real creator (no fantasy / no big production).\n"
+    "\n"
+    "Each pioneer concept MUST include:\n"
+    "  - concept_name (2-5 words)\n"
+    "  - inspired_by_story_flow_id (must match a library id)\n"
+    "  - first_2_seconds (concrete scene)\n"
+    "  - emotional_physics (which underlying forces it leverages)\n"
+    "  - why_it_is_not_a_direct_copy (one line; what specifically distinguishes it from the example labels)\n"
+    "  - why_it_could_be_breakout\n"
+    "  - viewer_comment_impulse (the specific comment urge it provokes)\n"
+    "  - ethical_or_cringe_risk\n"
+    "\n"
+    "# Phase 5 scoring (each in [0, 1])\n"
+    "\n"
+    "  - story_flow_strength_score:     how cleanly the source maps onto a library flow.\n"
+    "  - novelty_beyond_baseline_score: how far the source moves beyond the existing example labels.\n"
+    "  - ethical_risk_score:            use the matched flow's ethical_risk_default as a floor; raise it if what's actually visible warrants. For the Ethical Edge Vulnerability flow, ethical_risk_score should typically be >= 0.7.\n"
+    "  - cringe_risk_score:             staged / AI-slop / cooked-format risk.\n"
+    "  - breakout_potential_score:      summary of how big this could go if executed cleanly. Pioneer concepts are weighted heavily by this.\n"
+    "\n"
+)
+
+_PHASE5_SCHEMA_INSERT = (
+    '  "matched_story_flows": [\n'
+    '    { "id": string, "name": string, "confidence": number, "why_matched": string }\n'
+    '  ],\n'
+    '  "dominant_story_flow": string,\n'
+    '  "story_flow_steps_observed": [string, ...],\n'
+    '  "story_flow_strength_score": number,\n'
+    '  "novelty_beyond_baseline_score": number,\n'
+    '  "ethical_risk_score": number,\n'
+    '  "cringe_risk_score": number,\n'
+    '  "breakout_potential_score": number,\n'
+    '  "variations": [\n'
+    '    {\n'
+    '      "concept_name": string,\n'
+    '      "story_flow_id": string,\n'
+    '      "first_2_seconds": string,\n'
+    '      "emotional_trigger": string,\n'
+    '      "viewer_role": string,\n'
+    '      "why_it_could_go_viral": string,\n'
+    '      "what_is_new": string,\n'
+    '      "what_is_cooked_to_avoid": string,\n'
+    '      "believability_risk": string\n'
+    '    }\n'
+    '  ],\n'
+    '  "pioneer_concepts": [\n'
+    '    {\n'
+    '      "concept_name": string,\n'
+    '      "inspired_by_story_flow_id": string,\n'
+    '      "first_2_seconds": string,\n'
+    '      "emotional_physics": string,\n'
+    '      "why_it_is_not_a_direct_copy": string,\n'
+    '      "why_it_could_be_breakout": string,\n'
+    '      "viewer_comment_impulse": string,\n'
+    '      "ethical_or_cringe_risk": string\n'
+    '    }\n'
+    '  ],\n'
+)
+
+
+def _assemble_hook_strategy_prompt() -> str:
+    """Insert the Phase-5 library and schema additions into the base
+    Phase-4 prompt. Anchors are unique markers in the base prompt; any
+    edit that breaks one of them will fail this assembly at import time
+    and be caught immediately."""
+    base = _BASE_HOOK_STRATEGY_PROMPT
+    schema_anchor = "# Schema (return EXACTLY"
+    if schema_anchor not in base:
+        raise RuntimeError("Phase 5 prompt anchor missing: schema header.")
+    schema_key_anchor = '  "creative_hook_concepts":'
+    if schema_key_anchor not in base:
+        raise RuntimeError("Phase 5 prompt anchor missing: creative_hook_concepts.")
+    out = base.replace(
+        schema_anchor,
+        _PHASE5_PROMPT_INSERT + schema_anchor,
+        1,
+    )
+    out = out.replace(
+        schema_key_anchor,
+        _PHASE5_SCHEMA_INSERT + schema_key_anchor,
+        1,
+    )
+    return out
+
+
+HOOK_STRATEGY_SYSTEM_PROMPT = _assemble_hook_strategy_prompt()
 
 
 def build_hook_strategy_user_prompt(
