@@ -180,4 +180,203 @@ def test_shipped_oliver_fixture_matches_a_good_report():
     fixture_path = Path(__file__).resolve().parents[1] / "docs" / "examples" / "oliver_expected.json"
     expected = E.load_expected(fixture_path)
     result = E.evaluate_report(_oliver_good_report(), expected)
-    assert result.passed is True, f"shipped fixture rejects a good report. missing={result.required_terms_missing}"
+    assert result.passed is True, (
+        f"shipped fixture rejects a good report. "
+        f"missing_terms={result.required_terms_missing} "
+        f"missing_groups={result.required_any_missing}"
+    )
+
+
+# ============================================================================
+# required_any equivalence groups (Phase 3.1)
+# ============================================================================
+
+def _gemini_style_report() -> dict:
+    """A report that mirrors the gemini-2.5-flash Phase-3 VPS output:
+    correct Pass 1 evidence using 'dropped' and 'broken' instead of
+    'smashed' / 'thrown'. Phase 3.1 evaluator must accept this."""
+    return {
+        "visual_hook_summary": (
+            "At an outdoor market stall, a man picks up the maker's "
+            "dragon-themed lamp, drops it, and the lamp breaks on the ground."
+        ),
+        "onscreen_text": "Please be honest, how are they?",
+        "emotional_mechanic": "public disrespect + underdog maker (viewer-defense instinct)",
+        "viewer_role": "defender",
+        "caption": "Please be honest, how are they?",
+        "raw_analysis": {
+            "analysis_mode": "two_pass",
+            "visual_event_pass": {
+                "environment": "outdoor weekend market stall",
+                "people": "underdog handmade seller; passerby",
+                "product_or_object": "handmade dragon-themed lamp (HTTYD style)",
+                "physical_action": "dropped and broken on the ground",
+                "object_state_change": "lamp starts on the display table, ends broken on the ground",
+                "visual_conflict_detected": True,
+                "conflict_type": "drop",
+                "frame_observations": [
+                    {"timestamp": "0.0s", "observation": "market stall with dragon lamps"},
+                    {"timestamp": "1.0s", "observation": "man picks up a dragon lamp"},
+                    {"timestamp": "1.5s", "observation": "man drops the lamp"},
+                    {"timestamp": "2.0s", "observation": "lamp lies broken on the ground"},
+                ],
+            },
+            "hook_strategy_pass": {
+                "why_it_works": "viewer-defense engine",
+            },
+        },
+    }
+
+
+def test_required_any_passes_when_any_synonym_present():
+    expected = {
+        "required_any": [
+            ["smashed", "thrown", "dropped", "broken"],
+        ],
+    }
+    report = {"visual_hook_summary": "the lamp was DROPPED on the floor"}
+    result = E.evaluate_report(report, expected)
+    assert result.passed is True
+    assert result.required_any_total == 1
+    assert len(result.required_any_matched) == 1
+    assert result.required_any_matched[0]["matched"] == "dropped"
+    assert result.required_any_missing == []
+
+
+def test_required_any_fails_when_whole_group_missing():
+    expected = {
+        "required_any": [
+            ["smashed", "thrown", "dropped", "broken"],
+            ["dragon lamp", "HTTYD lamp"],
+        ],
+    }
+    report = {"visual_hook_summary": "creator stares sadly at his table"}
+    result = E.evaluate_report(report, expected)
+    assert result.passed is False
+    assert result.required_any_total == 2
+    assert result.required_any_matched == []
+    # Both groups missing.
+    assert len(result.required_any_missing) == 2
+    assert ["smashed", "thrown", "dropped", "broken"] in result.required_any_missing
+
+
+def test_required_any_mixed_with_required_terms():
+    expected = {
+        "required_terms": ["market stall"],
+        "required_any": [
+            ["smashed", "dropped", "broken"],
+        ],
+    }
+    report = {"visual_hook_summary": "at the market stall, the lamp was broken"}
+    result = E.evaluate_report(report, expected)
+    assert result.passed is True
+    assert result.required_terms_matched == ["market stall"]
+    assert result.required_any_matched[0]["matched"] == "broken"
+
+
+def test_required_any_case_insensitive():
+    expected = {"required_any": [["smashed", "thrown"]]}
+    report = {"visual_hook_summary": "lamp was THROWN onto the floor"}
+    result = E.evaluate_report(report, expected)
+    assert result.passed is True
+
+
+def test_required_any_invalid_spec_raises():
+    with pytest.raises(ValueError):
+        E.evaluate_report({}, {"required_any": "not-a-list"})
+    with pytest.raises(ValueError):
+        E.evaluate_report({}, {"required_any": ["not-a-nested-list"]})
+
+
+def test_required_any_ignores_empty_groups_and_empty_strings():
+    """Defensive: empty groups and empty strings inside groups shouldn't
+    explode or skew the total."""
+    expected = {
+        "required_any": [
+            ["", "  "],          # entire group is empty -> skipped
+            ["smashed", "broken"],
+        ],
+    }
+    report = {"visual_hook_summary": "lamp broken"}
+    result = E.evaluate_report(report, expected)
+    assert result.passed is True
+    assert result.required_any_total == 1  # the empty group was skipped
+
+
+def test_mechanic_any_matches_any_synonym():
+    expected = {
+        "mechanic_any": [
+            "public disrespect + underdog maker",
+            "public rejection of underdog maker",
+            "viewer-defense",
+        ],
+    }
+    report = {"emotional_mechanic": "public rejection of underdog maker triggers defense"}
+    result = E.evaluate_report(report, expected)
+    assert result.mechanic_match is True
+    assert result.passed is True
+
+
+def test_mechanic_any_no_match_when_actual_unrelated():
+    expected = {
+        "mechanic_any": [
+            "public disrespect + underdog maker",
+            "viewer-defense",
+        ],
+    }
+    report = {"emotional_mechanic": "creator vulnerability"}
+    result = E.evaluate_report(report, expected)
+    assert result.mechanic_match is False
+    assert result.passed is False
+
+
+def test_mechanic_match_combines_expected_and_any():
+    """If expected_mechanic is set AND mechanic_any is set, matching
+    EITHER counts."""
+    expected = {
+        "expected_mechanic": "public disrespect + underdog maker",
+        "mechanic_any": ["viewer-defense"],
+    }
+    # Actual matches mechanic_any but not expected_mechanic exactly.
+    report = {"emotional_mechanic": "drives viewer-defense instinct"}
+    result = E.evaluate_report(report, expected)
+    assert result.mechanic_match is True
+
+
+def test_shipped_oliver_fixture_passes_with_dropped_and_broken():
+    """Phase-3.1 regression: the shipped Oliver fixture must accept a
+    gemini-2.5-flash-style report that uses 'dropped' / 'broken' instead
+    of 'smashed' / 'thrown'."""
+    fixture_path = Path(__file__).resolve().parents[1] / "docs" / "examples" / "oliver_expected.json"
+    expected = E.load_expected(fixture_path)
+    result = E.evaluate_report(_gemini_style_report(), expected)
+    assert result.passed is True, (
+        f"Oliver fixture rejects a gemini-style report. "
+        f"missing_terms={result.required_terms_missing} "
+        f"missing_groups={result.required_any_missing} "
+        f"mechanic_match={result.mechanic_match}"
+    )
+
+
+def test_shipped_oliver_fixture_still_passes_with_smashed_and_thrown():
+    """Belt-and-braces: the original 'smashed/thrown' wording must
+    continue to pass after the fixture rewrite. The fixture should be
+    *more* permissive, not less."""
+    fixture_path = Path(__file__).resolve().parents[1] / "docs" / "examples" / "oliver_expected.json"
+    expected = E.load_expected(fixture_path)
+    result = E.evaluate_report(_oliver_good_report(), expected)
+    assert result.passed is True
+
+
+def test_shipped_oliver_fixture_rejects_soft_mechanic():
+    """If Pass 2 softens 'public disrespect' into 'accidentally broken'
+    or 'tension and disappointment' (the failure mode we are guarding
+    against), the canary must still fail."""
+    soft = _gemini_style_report()
+    soft["emotional_mechanic"] = "tension and disappointment after accident"
+    fixture_path = Path(__file__).resolve().parents[1] / "docs" / "examples" / "oliver_expected.json"
+    expected = E.load_expected(fixture_path)
+    result = E.evaluate_report(soft, expected)
+    # Visual terms still appear in the haystack; the mechanic check is what fails.
+    assert result.mechanic_match is False
+    assert result.passed is False

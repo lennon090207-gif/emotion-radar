@@ -188,6 +188,82 @@ def test_pass2_prompt_lists_cooked_phrases_to_avoid():
         assert cooked in sp, f"Pass 2 prompt missing cooked-phrase warning: {cooked}"
 
 
+# --- Pass 2 binding rules (Phase 3.1) --------------------------------------
+
+def test_pass2_prompt_forbids_accidental_label_without_pass1_signal():
+    """The strategist must not declare an action 'accidental' unless Pass
+    1 explicitly said so. This is the rule that stopped gemini's correct
+    'dropped' + 'broke on ground' evidence from being softened into
+    'accidentally broken'."""
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT.lower()
+    assert "accident" in sp  # the word appears in the rule
+    # The phrasing of the rule — match phrases that mean "don't call it
+    # accidental unless Pass 1 says it is".
+    assert (
+        "do not call" in sp and "accidental" in sp
+    ) or "unless pass 1 explicitly" in sp
+
+
+def test_pass2_prompt_destruction_plus_insult_resolves_to_public_disrespect():
+    """Destruction in Pass 1 + insulting on-screen text => the mechanic
+    MUST be public disrespect + underdog maker. This is the rule that
+    prevents 'tension and disappointment' / 'creator validation' style
+    softening."""
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
+    lowered = sp.lower()
+    # Destruction vocabulary is enumerated.
+    for word in ("dropped", "broken", "smashed", "shattered", "thrown",
+                 "on the ground", "on the floor"):
+        assert word in lowered, f"destruction term missing in Pass 2 prompt: {word}"
+    # Insult vocabulary is enumerated.
+    for word in ("nobody will buy", "stop making", "worthless",
+                 "please be honest", "would you buy"):
+        assert word in lowered, f"insult-text trigger missing in Pass 2 prompt: {word}"
+    # The conclusion phrase is spelled out.
+    assert "public disrespect + underdog maker" in sp
+    # The soft framings are explicitly rejected.
+    for soft in (
+        "tension and disappointment",
+        "accidentally broken",
+        "creator validation",
+        "creator vulnerability",
+        "generic appreciation",
+    ):
+        assert soft in lowered, f"Pass 2 prompt should explicitly reject '{soft}'"
+
+
+def test_pass2_prompt_conflict_must_be_central_when_detected():
+    """If Pass 1 visual_conflict_detected is true, the conflict has to
+    appear in BOTH visual_hook_summary AND emotional_mechanic."""
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT.lower()
+    assert "visual_conflict_detected" in sp
+    assert "central" in sp
+    # The instruction names both target fields.
+    assert "visual_hook_summary" in sp
+    assert "emotional_mechanic" in sp
+
+
+def test_pass2_prompt_mutations_keep_edge_when_source_is_conflict():
+    """When Pass 1 detects conflict, every mutation must preserve the
+    conflict / disrespect / underdog edge. Positive-validation
+    mutations are explicitly forbidden in this regime."""
+    sp = A.HOOK_STRATEGY_SYSTEM_PROMPT.lower()
+    # The "preserve the edge" rule is stated.
+    assert "preserve" in sp and "edge" in sp
+    # Positive-validation examples are listed as forbidden.
+    for soft_mutation in (
+        "thumbs up",
+        "takes a selfie",
+        "smiles at the maker",
+        "i love it",
+    ):
+        assert soft_mutation in sp, (
+            f"Pass 2 prompt should forbid soft mutation example: {soft_mutation}"
+        )
+    # "Vary the niche, not the polarity" is the explicit guidance.
+    assert "do not vary the polarity" in sp or "vary the niche" in sp
+
+
 def test_build_hook_strategy_user_prompt_embeds_pass1_json():
     md = {
         "platform": "TikTok",

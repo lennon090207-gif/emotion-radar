@@ -18,7 +18,11 @@ class _MockVisionProvider:
     name = "mock_vision"
     model = "mock-vision-1"
 
-    def __init__(self, image_response: str, text_response: str = "{}"):
+    # text_response defaults to garbage so that the repair fallback (which
+    # calls analyze_text after a parse failure) cannot accidentally rescue a
+    # test that's specifically meant to surface a parse error. Tests that
+    # want repair to succeed should set text_response explicitly.
+    def __init__(self, image_response: str, text_response: str = "<<INVALID JSON FROM MOCK>>"):
         self._image_response = image_response
         self._text_response = text_response
         self.image_calls: list[dict[str, Any]] = []
@@ -243,3 +247,88 @@ def test_merge_drops_non_list_hook_mutations():
 def test_merge_returns_analysis_result_dataclass():
     result = A.build_two_pass_analysis_result(PASS1_GOOD, PASS2_GOOD)
     assert isinstance(result, AnalysisResult)
+
+
+# ============================================================================
+# JSON repair fallback
+# ============================================================================
+
+def test_repair_recovers_from_dirty_pass1_output(tmp_path: Path):
+    """Image returns prose-wrapped near-JSON; repair text call cleans it up."""
+    sheet = tmp_path / "sheet.jpg"
+    sheet.write_bytes(b"fake")
+    dirty = "Sure! here is your response:\n\nthe model forgot the braces"
+    provider = _MockVisionProvider(
+        image_response=dirty,
+        text_response=json.dumps(PASS1_GOOD),
+    )
+    parsed = A.extract_visual_event(sheet, {}, provider)
+    assert parsed["conflict_type"] == "smash"
+    assert len(provider.image_calls) == 1  # original Pass 1 call
+    assert len(provider.text_calls) == 1   # one repair call
+
+
+def test_repair_preserves_original_error_when_repair_also_fails(tmp_path: Path):
+    """If both the initial parse AND the repair attempt fail, the user
+    sees the ORIGINAL ValueError — that's the one that explains why we
+    couldn't make sense of the model output."""
+    sheet = tmp_path / "sheet.jpg"
+    sheet.write_bytes(b"fake")
+    provider = _MockVisionProvider(
+        image_response="garbage from the model",
+        # text_response defaults to invalid; repair attempt will also fail.
+    )
+    with pytest.raises(ValueError):
+        A.extract_visual_event(sheet, {}, provider)
+
+
+def test_repair_uses_supplied_repair_provider_not_main_provider(tmp_path: Path):
+    """Pass 1 producing garbage should route the repair call to the
+    explicit repair_provider, not the vision provider. Keeps cost
+    sensible when Pass 1 is an expensive vision model."""
+    sheet = tmp_path / "sheet.jpg"
+    sheet.write_bytes(b"fake")
+    vision = _MockVisionProvider(image_response="not parseable")
+    repair = _MockVisionProvider(
+        image_response="<<unused>>",
+        text_response=json.dumps(PASS1_GOOD),
+    )
+    parsed = A.extract_visual_event(
+        sheet, {}, vision, repair_provider=repair,
+    )
+    assert parsed["conflict_type"] == "smash"
+    assert len(vision.image_calls) == 1
+    assert vision.text_calls == []        # main provider untouched on repair
+    assert len(repair.text_calls) == 1    # repair handled by the repair provider
+
+
+def test_repair_off_when_repair_provider_is_None(tmp_path: Path):
+    """If repair_provider is explicitly None and the initial parse
+    fails, ValueError surfaces immediately with no extra calls."""
+    raw = "still not json"
+    with pytest.raises(ValueError):
+        A._parse_or_repair(raw, repair_provider=None)
+
+
+def test_analyze_two_pass_uses_strategy_provider_as_repair_target(tmp_path: Path):
+    """When Pass 1 (vision) produces unparseable output, the orchestrator
+    should route the repair call to the strategy (text) provider — not
+    re-invoke the vision provider."""
+    sheet = tmp_path / "sheet.jpg"
+    sheet.write_bytes(b"fake")
+    vision = _MockVisionProvider(image_response="not json at all")
+    strategy = _MockVisionProvider(
+        image_response="<<unused>>",
+        text_response=json.dumps(PASS1_GOOD),
+    )
+    # The first text call on `strategy` will repair Pass 1 -> PASS1_GOOD.
+    # Then generate_hook_strategy runs and needs Pass 2 JSON. Its initial
+    # text response is also PASS1_GOOD, which parses fine as a dict (Pass
+    # 2 just needs a JSON object). We're not asserting Pass 2 quality —
+    # only that the strategy provider, not the vision provider, was used
+    # for the Pass 1 repair.
+    A.analyze_two_pass(sheet, {}, vision, strategy)
+    assert len(vision.image_calls) == 1
+    assert vision.text_calls == []        # vision never asked to repair
+    assert len(strategy.image_calls) == 0
+    assert len(strategy.text_calls) >= 1  # at least the Pass 1 repair

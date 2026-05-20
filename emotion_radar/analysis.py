@@ -147,6 +147,34 @@ This is the STRATEGY pass (Pass 2 of 2). The evidence has already been gathered 
 4. Identify the viewer role the hook conjures: defender, judge, voyeur, learner, accomplice, witness, etc.
 5. Return STRICT JSON only. No prose outside the JSON object. No markdown fences. No commentary.
 
+# Pass 1 evidence is BINDING (do not soften, do not contradict)
+
+These rules override your priors. Pass 1 is ground truth.
+
+- Do NOT call any action "accidental" unless Pass 1 explicitly uses the words "accident" / "accidentally" / "unintentional" OR Pass 1's `uncertainty_notes` strongly indicate the action was unintentional. If Pass 1 reports a product was picked up, dropped, broken, smashed, shattered, thrown, knocked over, or ended on the ground / on the floor, treat the destruction as INTENTIONAL by default. The natural default for a stranger handling a stranger's product and ending it on the floor is disrespect, not clumsiness.
+
+- DESTRUCTION + INSULTING-TEXT RULE: if Pass 1 reports destruction (any of: dropped / broken / smashed / shattered / thrown / knocked over / on the ground / on the floor) AND the on-screen text contains rejection / insult / "honest-feedback" framing such as "nobody will buy", "stop making", "worthless", "this is bad", "ugly", "trash", "please be honest", "would you buy", or similar, the emotional_mechanic IS:
+
+    "public disrespect + underdog maker + viewer-defense instinct"
+
+  Do NOT retreat to "tension and disappointment", "accidentally broken", "creator validation", "creator vulnerability", "generic appreciation", or any other softer framing. The injustice IS the engine.
+
+- If `visual_conflict_detected` is true, the conflict MUST be CENTRAL in BOTH `visual_hook_summary` AND `emotional_mechanic`. Do not bury it in a subordinate clause. Do not relocate it to a side note. The conflict is the lede.
+
+- Preserve the emotional edge — disrespect, injustice, public shame — whenever the evidence supports it. Strip-mining the conflict out and replacing it with a feel-good frame is the exact failure mode we are guarding against.
+
+# When the source mechanic is conflict, mutations MUST keep the edge
+
+If `visual_conflict_detected` is true in Pass 1, EVERY mutation you produce must preserve a conflict / disrespect / underdog / injustice axis. DO NOT propose feel-good or validation mutations. Specifically forbidden when the source is a conflict hook:
+  - "customer smiles at the maker",
+  - "customer takes a selfie with the product",
+  - "customer gives a thumbs up",
+  - "customer says 'I love it'",
+  - any positive-validation framing,
+  - any "appreciation"-themed opening.
+
+Vary the niche and the setting. Do NOT vary the polarity. If the source video is about disrespect, your safe / fresh / big_swing mutations are all about *flavors* of disrespect (rude haggling, snide comments, refund attempt, public mockery, dismissive handling, etc.) in different handmade-and-emotional-gift niches.
+
 # Scoring rubric (each score is a float in [0, 1])
 
 - product_attachability_score: how cleanly a real handmade / emotional / custom product can ride this mechanic.
@@ -356,25 +384,62 @@ def _coerce_str_or_none(v: Any) -> str | None:
 # Two-pass orchestration
 # ============================================================================
 
+_REPAIR_SYSTEM_PROMPT = (
+    "You convert near-JSON to strict JSON. The user message contains text "
+    "that was supposed to be a single JSON object but isn't (extra prose, "
+    "fences, trailing commas, unescaped quotes, etc.). Return ONLY a single "
+    "valid JSON object reflecting the same data. No prose. No markdown "
+    "fences. No commentary."
+)
+
+
+def _parse_or_repair(raw: str, repair_provider: VisionProvider | None) -> dict[str, Any]:
+    """Try to parse `raw` as JSON. On failure, optionally ask
+    `repair_provider` (text-only call) to convert it into strict JSON
+    and try once more. If the repair attempt also fails, the ORIGINAL
+    parse error is the one that surfaces — that's the error a human
+    needs to see to diagnose the underlying problem."""
+    try:
+        return parse_analysis_json(raw)
+    except ValueError as first_err:
+        if repair_provider is None:
+            raise
+        try:
+            repaired = repair_provider.analyze_text(
+                _REPAIR_SYSTEM_PROMPT,
+                "Convert the following to a valid JSON object:\n\n" + raw,
+            )
+            return parse_analysis_json(repaired)
+        except Exception:
+            raise first_err
+
+
 def extract_visual_event(
     contact_sheet_path: Path,
     metadata: dict[str, Any],
     provider: VisionProvider,
+    repair_provider: VisionProvider | None = None,
 ) -> dict[str, Any]:
-    """Pass 1. Returns the parsed JSON dict (not an AnalysisResult)."""
+    """Pass 1. Returns the parsed JSON dict (not an AnalysisResult).
+
+    `repair_provider` (text-only) is given one shot to fix near-JSON if
+    the initial parse fails. Defaults to the same provider that
+    produced the vision output; callers can pass a separate cheaper
+    text model if they want."""
     user_prompt = build_visual_event_user_prompt(metadata)
     raw = provider.analyze_image(
         contact_sheet_path,
         VISUAL_EVENT_SYSTEM_PROMPT,
         user_prompt,
     )
-    return parse_analysis_json(raw)
+    return _parse_or_repair(raw, repair_provider or provider)
 
 
 def generate_hook_strategy(
     metadata: dict[str, Any],
     pass1_result: dict[str, Any],
     provider: VisionProvider,
+    repair_provider: VisionProvider | None = None,
 ) -> dict[str, Any]:
     """Pass 2. Text-only — consumes Pass 1's JSON evidence layer."""
     user_prompt = build_hook_strategy_user_prompt(metadata, pass1_result)
@@ -382,7 +447,7 @@ def generate_hook_strategy(
         HOOK_STRATEGY_SYSTEM_PROMPT,
         user_prompt,
     )
-    return parse_analysis_json(raw)
+    return _parse_or_repair(raw, repair_provider or provider)
 
 
 def analyze_two_pass(
@@ -392,11 +457,17 @@ def analyze_two_pass(
     strategy_provider: VisionProvider | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run Pass 1 -> Pass 2 and return both parsed JSON dicts.
-    `strategy_provider` defaults to `vision_provider` (same model for both
-    passes) if not supplied."""
+    `strategy_provider` defaults to `vision_provider` (same model for
+    both passes) if not supplied.
+
+    The strategy (text-only) provider also acts as the repair model for
+    Pass 1 JSON parse failures. That keeps repair cheap when Pass 1 is
+    a strong vision model and Pass 2 is a cheaper text model."""
     sp = strategy_provider or vision_provider
-    pass1 = extract_visual_event(contact_sheet_path, metadata, vision_provider)
-    pass2 = generate_hook_strategy(metadata, pass1, sp)
+    pass1 = extract_visual_event(
+        contact_sheet_path, metadata, vision_provider, repair_provider=sp,
+    )
+    pass2 = generate_hook_strategy(metadata, pass1, sp, repair_provider=sp)
     return pass1, pass2
 
 

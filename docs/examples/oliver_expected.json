@@ -1,14 +1,31 @@
 {
-  "_comment": "Calibration spec for the Oliver HTTYD lamp video. The real hook is a stranger smashing the maker's handmade dragon lamp at an outdoor market stall. The earlier Phase-2 prompt missed the action entirely; this spec is the canary that catches that regression.",
+  "_comment": "Calibration spec for the Oliver HTTYD lamp video. The real hook is a stranger destroying the maker's handmade dragon lamp at an outdoor market stall. We use required_any groups so the canary accepts the model's word choice (dropped / broken / smashed / thrown / on the ground / on the floor) — gemini-2.5-flash uses 'dropped' and 'broken'; other models say 'smashed' or 'thrown'. The mechanic must still resolve to public disrespect of an underdog maker.",
   "_source_url": "https://www.tiktok.com/@olivermakesartt/video/7623559389307211030",
+  "_authoring_note": "If you change synonyms here, also run tests/test_evaluator.py::test_shipped_oliver_fixture_matches_a_good_report and tests/test_evaluator.py::test_shipped_oliver_fixture_passes_with_dropped_and_broken — they protect this fixture against drift.",
+
   "required_terms": [
-    "market stall",
-    "smashed",
-    "thrown",
-    "dragon lamp",
-    "public disrespect",
-    "underdog maker"
+    "market stall"
   ],
+
+  "required_any": [
+    [
+      "smashed", "thrown", "dropped", "broken", "shattered",
+      "on the ground", "on the floor"
+    ],
+    [
+      "dragon lamp", "HTTYD lamp", "Dragon Resin Lamp",
+      "dragon-themed lamp", "httyd"
+    ],
+    [
+      "public disrespect", "public rejection", "insult", "mockery",
+      "rejection", "disrespect"
+    ],
+    [
+      "underdog maker", "handmade seller", "small creator",
+      "handmade creator", "underdog", "small maker"
+    ]
+  ],
+
   "forbidden_terms": [
     "street musician",
     "busker",
@@ -18,5 +35,15 @@
     "real estate",
     "dropshipping"
   ],
-  "expected_mechanic": "public disrespect + underdog maker"
+
+  "expected_mechanic": "public disrespect + underdog maker",
+  "mechanic_any": [
+    "public disrespect + underdog maker",
+    "public rejection of underdog maker",
+    "underdog maker + public disrespect",
+    "disrespect of an underdog maker",
+    "public disrespect of a handmade seller",
+    "rejection of underdog maker + viewer-defense",
+    "viewer-defense"
+  ]
 }

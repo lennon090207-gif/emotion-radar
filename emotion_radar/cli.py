@@ -521,21 +521,35 @@ def _print_evaluation(
     click.echo(f"  status:    {status}{label}")
     click.echo(f"  spec:      {spec_path}")
     click.echo(
-        f"  required:  {len(result.required_terms_matched)}/{result.required_terms_total} matched"
+        f"  required:    {len(result.required_terms_matched)}/{result.required_terms_total} matched"
     )
     if result.required_terms_missing:
-        click.echo("  missing terms:")
+        click.echo("  missing required_terms:")
         for term in result.required_terms_missing:
             click.echo(f"    - {term}")
+    if result.required_any_total or result.required_any_missing:
+        click.echo(
+            f"  required_any: "
+            f"{len(result.required_any_matched)}/{result.required_any_total} groups matched"
+        )
+    for hit in result.required_any_matched:
+        click.echo(f"    + matched \"{hit['matched']}\" from {hit['group']}")
+    if result.required_any_missing:
+        click.echo("  missing required_any groups (none of the synonyms appeared):")
+        for group in result.required_any_missing:
+            click.echo(f"    - any of: {group}")
     if result.forbidden_terms_present:
         click.echo("  forbidden terms PRESENT (taste regression):")
         for term in result.forbidden_terms_present:
             click.echo(f"    ! {term}")
-    if result.expected_mechanic is not None:
+    if result.expected_mechanic is not None or result.mechanic_any:
         verdict = "match" if result.mechanic_match else "MISMATCH"
         click.echo(f"  expected_mechanic: {verdict}")
-        click.echo(f"    expected: {result.expected_mechanic}")
-        click.echo(f"    actual:   {actual_mechanic or '—'}")
+        if result.expected_mechanic:
+            click.echo(f"    expected:    {result.expected_mechanic}")
+        if result.mechanic_any:
+            click.echo(f"    or any of:   {result.mechanic_any}")
+        click.echo(f"    actual:      {actual_mechanic or '—'}")
     if not result.passed:
         click.echo("\nCalibration failed. Do not trust this report yet.", err=True)
 
@@ -651,9 +665,10 @@ def analyze_link_cmd(
 @click.pass_context
 def evaluate_report_cmd(ctx: click.Context, report_id: str, expected_path: str) -> None:
     """Compare an analyzed report against an expected.json spec
-    (required_terms / forbidden_terms / expected_mechanic). Simple
-    case-insensitive substring check — a fast canary, not a semantic
-    judge. Exit code is non-zero on failure."""
+    (required_terms / required_any groups / forbidden_terms /
+    expected_mechanic / mechanic_any). Simple case-insensitive
+    substring check; a fast canary, not a semantic judge. Exit code
+    is non-zero on failure."""
     paths = ctx.obj["paths"]
     report = get_report(paths.db_path, report_id)
     if not report:
@@ -677,18 +692,32 @@ def evaluate_report_cmd(ctx: click.Context, report_id: str, expected_path: str) 
         for term in result.required_terms_matched:
             click.echo(f"  + {term}")
     if result.required_terms_missing:
-        click.echo("missing terms:")
+        click.echo("missing required_terms:")
         for term in result.required_terms_missing:
             click.echo(f"  - {term}")
+    if result.required_any_total or result.required_any_missing:
+        click.echo(
+            f"required_any: {len(result.required_any_matched)}/"
+            f"{result.required_any_total} groups matched"
+        )
+    for hit in result.required_any_matched:
+        click.echo(f"  + matched \"{hit['matched']}\" from {hit['group']}")
+    if result.required_any_missing:
+        click.echo("missing required_any groups (none of the synonyms appeared):")
+        for group in result.required_any_missing:
+            click.echo(f"  - any of: {group}")
     if result.forbidden_terms_present:
         click.echo("forbidden terms PRESENT (taste regression):")
         for term in result.forbidden_terms_present:
             click.echo(f"  ! {term}")
-    if result.expected_mechanic is not None:
+    if result.expected_mechanic is not None or result.mechanic_any:
         verdict = "match" if result.mechanic_match else "MISMATCH"
         click.echo(f"expected_mechanic: {verdict}")
-        click.echo(f"  expected: {result.expected_mechanic}")
-        click.echo(f"  actual:   {report.get('emotional_mechanic')}")
+        if result.expected_mechanic:
+            click.echo(f"  expected:  {result.expected_mechanic}")
+        if result.mechanic_any:
+            click.echo(f"  or any of: {result.mechanic_any}")
+        click.echo(f"  actual:    {report.get('emotional_mechanic')}")
 
     if not result.passed:
         # Make CI / shell-pipeline failures obvious.

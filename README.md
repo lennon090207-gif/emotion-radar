@@ -83,6 +83,26 @@ Optional overrides:
 
 Same resolution order as `APIFY_TOKEN` (env -> `/root/.hermes/.env` -> `./.env`). Keys are never logged or printed.
 
+### Recommended models (from real VPS testing on the Oliver canary)
+
+```
+VISION_EVENT_MODEL=google/gemini-2.5-flash
+HOOK_STRATEGY_MODEL=gpt-4o
+```
+
+On the Oliver HTTYD-lamp video, `gpt-4o` and `claude-sonnet-4.5` both
+missed the actual physical event (someone destroying the lamp) and
+softened it into mood. `google/gemini-2.5-flash` correctly identified
+the object motion across the dense contact sheet — "man picks up a
+lamp, drops it, and the lamp breaks on the ground" — so it's the
+current recommendation for **Pass 1**. The Pass-2 prompt has explicit
+rules forcing it not to soften Pass 1's evidence, but Pass 2's job is
+text reasoning, so any reasonably strong text model (gpt-4o, claude,
+gemini) works for that slot.
+
+This recommendation will go stale as models improve. The reliable test
+is the calibration canary itself (see "Calibration check" below).
+
 ## Commands
 
 ```bash
@@ -145,11 +165,34 @@ example):
 
 ```json
 {
-  "required_terms":    ["market stall", "smashed", "thrown", "dragon lamp"],
-  "forbidden_terms":   ["street musician", "SaaS", "crypto"],
-  "expected_mechanic": "public disrespect + underdog maker"
+  "required_terms": ["market stall"],
+
+  "required_any": [
+    ["smashed", "thrown", "dropped", "broken", "shattered", "on the ground"],
+    ["dragon lamp", "HTTYD lamp", "Dragon Resin Lamp"],
+    ["public disrespect", "rejection", "mockery", "insult"],
+    ["underdog maker", "handmade seller", "small creator"]
+  ],
+
+  "forbidden_terms": ["street musician", "SaaS", "crypto"],
+
+  "expected_mechanic": "public disrespect + underdog maker",
+  "mechanic_any": [
+    "public disrespect + underdog maker",
+    "public rejection of underdog maker",
+    "viewer-defense"
+  ]
 }
 ```
+
+- `required_terms`: every entry must appear in the report's text.
+- `required_any`: each group must have at least one entry that appears.
+  Use this for word choice the model can legitimately vary
+  (`dropped` vs `smashed` vs `thrown`, `dragon lamp` vs `HTTYD lamp`, etc.).
+- `forbidden_terms`: any hit fails the calibration (taste regression).
+- `expected_mechanic` / `mechanic_any`: the report's `emotional_mechanic`
+  must match at least one of these (case-insensitive substring, either
+  direction).
 
 Non-zero exit code on failure, so it can run in CI or a shell pipeline.
 
