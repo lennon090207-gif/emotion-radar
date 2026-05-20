@@ -23,12 +23,19 @@ DEFAULT_DB_FILENAME = "emotion_radar.db"
 DEFAULT_MAX_URLS = 3
 
 # Frame extraction window (seconds from start of video).
-FRAME_TIMESTAMPS_SEC = (0.0, 0.5, 1.0, 1.5, 2.0, 3.0, 4.0, 5.0)
+# Dense sampling in the first 1.5s — that's where most hooks land and where
+# motion between frames carries the signal (someone reaching for the product,
+# the product being knocked over, etc.). Then sparser through 2-5s.
+FRAME_TIMESTAMPS_SEC = (
+    0.0, 0.25, 0.5, 0.75, 1.0, 1.25, 1.5, 2.0, 3.0, 4.0, 5.0,
+)
 
 # Contact sheet defaults.
-CONTACT_SHEET_THUMB_WIDTH = 320
+# Tiles are larger than Phase 2 to preserve fine detail (signage, on-screen
+# text, what's actually in someone's hand) for the vision model.
+CONTACT_SHEET_THUMB_WIDTH = 400
 CONTACT_SHEET_COLS = 4
-CONTACT_SHEET_JPEG_QUALITY = 78
+CONTACT_SHEET_JPEG_QUALITY = 80
 
 # Apify actor and run input defaults.
 APIFY_ACTOR_ID = "clockworks~tiktok-video-scraper"

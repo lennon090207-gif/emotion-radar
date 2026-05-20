@@ -1,0 +1,22 @@
+{
+  "_comment": "Calibration spec for the Oliver HTTYD lamp video. The real hook is a stranger smashing the maker's handmade dragon lamp at an outdoor market stall. The earlier Phase-2 prompt missed the action entirely; this spec is the canary that catches that regression.",
+  "_source_url": "https://www.tiktok.com/@olivermakesartt/video/7623559389307211030",
+  "required_terms": [
+    "market stall",
+    "smashed",
+    "thrown",
+    "dragon lamp",
+    "public disrespect",
+    "underdog maker"
+  ],
+  "forbidden_terms": [
+    "street musician",
+    "busker",
+    "SaaS",
+    "fitness",
+    "crypto",
+    "real estate",
+    "dropshipping"
+  ],
+  "expected_mechanic": "public disrespect + underdog maker"
+}

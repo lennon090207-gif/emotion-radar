@@ -31,20 +31,111 @@ def test_system_prompt_lists_schema_keys():
         "people",
         "product_or_object",
         "action_or_conflict",
+        "physical_action",
+        "visual_conflict_detected",
         "onscreen_text",
         "emotional_mechanic",
         "viewer_role",
         "emotions_triggered",
         "why_it_works",
         "cooked_parts_to_avoid",
+        "confidence",
+        "uncertainty_notes",
         "product_attachability_score",
         "transferability_score",
         "freshness_score",
         "cooked_score",
         "overall_opportunity_score",
+        "frame_observations",
         "hook_mutations",
     ):
         assert key in sp, f"system prompt missing key: {key}"
+
+
+def test_system_prompt_requires_chronological_frame_reasoning():
+    sp = A.SYSTEM_PROMPT
+    lowered = sp.lower()
+    assert "chronological" in lowered or "chronologically" in lowered
+    assert "frame_observations" in sp
+    # Must instruct one entry per visible timestamp tile, in order.
+    assert "timestamp" in lowered
+    # Should explicitly tell the model to look at CHANGES between frames,
+    # not single static frames — that's the whole regression we're fixing.
+    assert "change" in lowered  # "changes" / "CHANGED" / "changes between"
+
+
+def test_system_prompt_lists_explicit_conflict_checks():
+    sp = A.SYSTEM_PROMPT.lower()
+    # The specific physical-action triggers the prompt MUST mention.
+    for required_phrase in (
+        "approaching",
+        "picking up",
+        "handling",
+        "thrown",
+        "smashed",
+        "market stall",
+        "disrespect",
+        "before-and-after",
+    ):
+        assert required_phrase in sp, f"prompt missing explicit check: {required_phrase}"
+
+
+def test_system_prompt_forbids_generic_sentiment_fallback():
+    sp = A.SYSTEM_PROMPT.lower()
+    # We want the prompt to actively tell the model NOT to retreat to
+    # "creator looks discouraged" style readings.
+    assert "discouraged" in sp
+    assert "action wins" in sp or "the action wins" in sp
+
+
+def test_system_prompt_taste_target_world():
+    sp = A.SYSTEM_PROMPT.lower()
+    for target in (
+        "handmade",
+        "emotional",
+        "custom",
+        "fandom",
+        "pet",
+        "memorial",
+        "market stall",
+    ):
+        assert target in sp, f"prompt missing target-world cue: {target}"
+
+
+def test_system_prompt_explicitly_rejects_unrelated_niches():
+    sp = A.SYSTEM_PROMPT.lower()
+    for forbidden in (
+        "street musician",
+        "busker",
+        "saas",
+        "fitness",
+        "crypto",
+        "real estate",
+        "dropshipping",
+    ):
+        assert forbidden in sp, f"prompt should explicitly reject: {forbidden}"
+
+
+def test_system_prompt_specifies_mutation_quota():
+    sp = A.SYSTEM_PROMPT
+    # Exactly 6 mutations split 2 safe / 3 fresh / 1 big_swing.
+    assert "6" in sp
+    assert '2 "safe"' in sp
+    assert '3 "fresh"' in sp
+    assert '1 "big_swing"' in sp
+
+
+def test_system_prompt_lists_per_mutation_fields():
+    sp = A.SYSTEM_PROMPT
+    for field_name in (
+        "opening_scene",
+        "onscreen_text",
+        "product_niche_fit",
+        "why_it_might_work",
+        "cringe_or_cooked_risk",
+        "production_difficulty",
+    ):
+        assert field_name in sp, f"mutation field missing in prompt: {field_name}"
 
 
 def test_build_user_prompt_includes_metadata():

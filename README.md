@@ -95,9 +95,33 @@ python -m emotion_radar show-report REPORT_ID
 python -m emotion_radar analyze-report REPORT_ID
 python -m emotion_radar analyze-report REPORT_ID --dry-run   # print prompt only, no API call
 
+# calibrate a report against a known-hook spec (case-insensitive substring check)
+python -m emotion_radar evaluate-report REPORT_ID --expected docs/examples/oliver_expected.json
+
 # delete old temp videos and frames (contact sheets are preserved)
 python -m emotion_radar cleanup-temp
 ```
+
+### Calibration / regression canary
+
+`evaluate-report` reads a small JSON file describing what a *correct*
+analysis of a known video should mention. It's a substring check, not a
+semantic judge — it exists to catch the failure mode where the model
+hallucinates a generic "creator looks discouraged" reading and misses
+the actual visual hook (someone smashing the product, etc.).
+
+Spec shape (`docs/examples/oliver_expected.json` is the working
+example):
+
+```json
+{
+  "required_terms":    ["market stall", "smashed", "thrown", "dragon lamp"],
+  "forbidden_terms":   ["street musician", "SaaS", "crypto"],
+  "expected_mechanic": "public disrespect + underdog maker"
+}
+```
+
+Non-zero exit code on failure, so it can run in CI or a shell pipeline.
 
 ### Flags
 

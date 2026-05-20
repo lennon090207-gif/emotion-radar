@@ -39,6 +39,7 @@ from .config import (
     resolve_paths,
 )
 from .db import get_report, insert_report, list_reports, update_report_analysis
+from .evaluator import evaluate_report as evaluate_report_fn, load_expected
 from .models import NormalizedItem
 from .providers import VisionProviderError, build_default_provider
 from .video import build_contact_sheet, download_video, extract_frames, VideoError
@@ -363,6 +364,57 @@ def analyze_report_cmd(ctx: click.Context, report_id: str, dry_run: bool) -> Non
     click.echo("\n=== Vision analysis ===")
     click.echo(json.dumps(fields, indent=2, ensure_ascii=False, sort_keys=True))
     click.echo(f"\nUpdated report {report_id}.")
+
+
+@cli.command("evaluate-report")
+@click.argument("report_id")
+@click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
+              required=True, help="Path to expected.json calibration spec.")
+@click.pass_context
+def evaluate_report_cmd(ctx: click.Context, report_id: str, expected_path: str) -> None:
+    """Compare an analyzed report against an expected.json spec
+    (required_terms / forbidden_terms / expected_mechanic). Simple
+    case-insensitive substring check — a fast canary, not a semantic
+    judge. Exit code is non-zero on failure."""
+    paths = ctx.obj["paths"]
+    report = get_report(paths.db_path, report_id)
+    if not report:
+        raise click.ClickException(f"No report with id={report_id}")
+    try:
+        expected = load_expected(expected_path)
+    except (FileNotFoundError, ValueError) as e:
+        raise click.ClickException(str(e)) from e
+
+    result = evaluate_report_fn(report, expected)
+
+    status = "PASS" if result.passed else "FAIL"
+    click.echo(f"=== Evaluation: {status} ===")
+    click.echo(f"report:   {report_id}")
+    click.echo(f"expected: {expected_path}")
+    click.echo(
+        f"required_terms: {len(result.required_terms_matched)}/"
+        f"{result.required_terms_total} matched"
+    )
+    if result.required_terms_matched:
+        for term in result.required_terms_matched:
+            click.echo(f"  + {term}")
+    if result.required_terms_missing:
+        click.echo("missing terms:")
+        for term in result.required_terms_missing:
+            click.echo(f"  - {term}")
+    if result.forbidden_terms_present:
+        click.echo("forbidden terms PRESENT (taste regression):")
+        for term in result.forbidden_terms_present:
+            click.echo(f"  ! {term}")
+    if result.expected_mechanic is not None:
+        verdict = "match" if result.mechanic_match else "MISMATCH"
+        click.echo(f"expected_mechanic: {verdict}")
+        click.echo(f"  expected: {result.expected_mechanic}")
+        click.echo(f"  actual:   {report.get('emotional_mechanic')}")
+
+    if not result.passed:
+        # Make CI / shell-pipeline failures obvious.
+        ctx.exit(1)
 
 
 @cli.command("cleanup-temp")
