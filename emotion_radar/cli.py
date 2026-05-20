@@ -1,8 +1,11 @@
 """CLI entrypoints.
 
 Commands:
-  analyze-url URL                  — analyze one TikTok URL
-  analyze-urls FILE                — analyze URLs listed in FILE (one per line)
+  analyze-link URL                 — one-shot: Apify -> contact sheet -> two-pass vision -> report
+  analyze-url URL                  — infrastructure-only: stops at contact sheet + report stub
+  analyze-urls FILE                — multi-URL infrastructure-only batch
+  analyze-report REPORT_ID         — re-run two-pass vision on an existing report
+  evaluate-report REPORT_ID        — calibration check against expected.json
   list-reports                     — show recent reports
   show-report REPORT_ID            — pretty-print one report as JSON
   cleanup-temp                     — delete temp videos and frames
@@ -39,10 +42,28 @@ from .config import (
     resolve_paths,
 )
 from .db import get_report, insert_report, list_reports, update_report_analysis
-from .evaluator import evaluate_report as evaluate_report_fn, load_expected
+from .evaluator import (
+    EvaluationResult,
+    evaluate_report as evaluate_report_fn,
+    load_expected,
+)
 from .models import NormalizedItem
-from .providers import VisionProviderError, build_default_provider
+from .providers import (
+    ROLE_HOOK_STRATEGY,
+    ROLE_VISION_EVENT,
+    VisionProvider,
+    VisionProviderError,
+    build_provider_for_role,
+)
 from .video import build_contact_sheet, download_video, extract_frames, VideoError
+
+
+# Known-fixture mapping: video_id -> calibration spec path (relative to repo).
+# analyze-link auto-runs the spec when the analyzed video matches.
+_PROJECT_ROOT = Path(__file__).resolve().parents[1]
+KNOWN_FIXTURES: dict[str, Path] = {
+    "7623559389307211030": _PROJECT_ROOT / "docs" / "examples" / "oliver_expected.json",
+}
 
 
 # ---- helpers ---------------------------------------------------------------
@@ -75,8 +96,8 @@ def _process_one(
     keep_temp: bool,
     apify_token: str | None = None,
 ) -> dict[str, Any]:
-    """Process a single normalized item through download → frames →
-    contact sheet → analysis stub → report dict. Errors in any step are
+    """Process a single normalized item through download -> frames ->
+    contact sheet -> analysis stub -> report dict. Errors in any step are
     captured and returned as report.error rather than raised, so a batch
     can continue."""
     report: dict[str, Any] = {
@@ -113,17 +134,17 @@ def _process_one(
     if apify_token and "api.apify.com" in item.video_download_url:
         dl_headers = {"Authorization": f"Bearer {apify_token}"}
     try:
-        click.echo(f"  → downloading video for {video_id} ...")
+        click.echo(f"  -> downloading video for {video_id} ...")
         video_path = download_video(
             item.video_download_url,
             paths.tmp_videos_dir,
             video_id,
             headers=dl_headers,
         )
-        click.echo(f"  → extracting frames at {list(FRAME_TIMESTAMPS_SEC)}s ...")
+        click.echo(f"  -> extracting frames at {list(FRAME_TIMESTAMPS_SEC)}s ...")
         frame_paths = extract_frames(video_path, frames_dir, FRAME_TIMESTAMPS_SEC)
         sheet_path = paths.contact_sheets_dir / f"{video_id}.jpg"
-        click.echo(f"  → building contact sheet → {sheet_path}")
+        click.echo(f"  -> building contact sheet -> {sheet_path}")
         build_contact_sheet(
             frame_paths,
             list(FRAME_TIMESTAMPS_SEC),
@@ -131,7 +152,7 @@ def _process_one(
         )
         report["contact_sheet_path"] = str(sheet_path)
 
-        click.echo("  → running analysis stub (vision model not wired yet)")
+        click.echo("  -> running analysis stub (vision model not wired yet)")
         result = analysis_mod.analyze_contact_sheet(sheet_path, report)
         report.update({
             "visual_hook_summary": result.visual_hook_summary,
@@ -193,7 +214,7 @@ def _run_pipeline(
         report_ids.append(rid)
         if report.get("error"):
             click.echo(f"  ! error: {report['error']}")
-        click.echo(f"  ✓ report id: {rid}")
+        click.echo(f"  report id: {rid}")
 
     return report_ids
 
@@ -288,60 +309,78 @@ def show_report_cmd(ctx: click.Context, report_id: str) -> None:
     click.echo(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True))
 
 
-@cli.command("analyze-report")
-@click.argument("report_id")
-@click.option("--dry-run", is_flag=True, default=False,
-              help="Print the prompt the model would receive, then exit. No API call.")
-@click.pass_context
-def analyze_report_cmd(ctx: click.Context, report_id: str, dry_run: bool) -> None:
-    """Run vision analysis on an existing report's contact sheet and
-    write the structured hook intelligence back into the row."""
-    paths = ctx.obj["paths"]
-    report = get_report(paths.db_path, report_id)
-    if not report:
-        raise click.ClickException(f"No report with id={report_id}")
-
+def _resolve_contact_sheet(report: dict[str, Any]) -> Path:
     sheet_str = report.get("contact_sheet_path")
     if not sheet_str:
         raise click.ClickException(
-            f"Report {report_id} has no contact_sheet_path. "
-            f"Re-run analyze-url for this URL first."
+            f"Report {report['id']} has no contact_sheet_path. "
+            f"Re-run analyze-url or analyze-link to regenerate it."
         )
     sheet_path = Path(sheet_str)
     if not sheet_path.is_file():
         raise click.ClickException(
             f"Contact sheet missing on disk: {sheet_path}. "
-            f"Re-run analyze-url to regenerate it."
+            f"Re-run analyze-url or analyze-link to regenerate it."
         )
+    return sheet_path
 
-    user_prompt = analysis_mod.build_user_prompt(report)
 
-    if dry_run:
-        click.echo("=== SYSTEM PROMPT ===")
-        click.echo(analysis_mod.SYSTEM_PROMPT)
-        click.echo("\n=== USER PROMPT ===")
-        click.echo(user_prompt)
-        click.echo(f"\n=== IMAGE ===\n{sheet_path}")
-        click.echo("\n(dry-run: no API call made)")
-        return
+def _print_two_pass_dry_run(report: dict[str, Any], sheet_path: Path) -> None:
+    """Print both Pass 1 and Pass 2 prompts. Pass 2's user prompt is
+    built with a placeholder evidence layer since the real Pass 1
+    output doesn't exist yet."""
+    pass1_user = analysis_mod.build_visual_event_user_prompt(report)
+    placeholder = {"_placeholder": "Pass 1 evidence-layer JSON would be embedded here"}
+    pass2_user = analysis_mod.build_hook_strategy_user_prompt(report, placeholder)
+    click.echo("=== PASS 1 SYSTEM (Visual Event Extractor) ===")
+    click.echo(analysis_mod.VISUAL_EVENT_SYSTEM_PROMPT)
+    click.echo("\n=== PASS 1 USER ===")
+    click.echo(pass1_user)
+    click.echo("\n=== PASS 2 SYSTEM (Hook Strategist) ===")
+    click.echo(analysis_mod.HOOK_STRATEGY_SYSTEM_PROMPT)
+    click.echo("\n=== PASS 2 USER (template; Pass 1 JSON is embedded at runtime) ===")
+    click.echo(pass2_user)
+    click.echo(f"\n=== IMAGE (Pass 1 input) ===\n{sheet_path}")
+    click.echo("\n(dry-run: no API call made)")
 
+
+def _build_pass_providers(env: dict[str, str]) -> tuple[VisionProvider, VisionProvider]:
+    """Two providers — one per role. Models follow the
+    VISION_EVENT_MODEL / HOOK_STRATEGY_MODEL / VISION_MODEL precedence
+    encoded in providers.build_provider_for_role."""
+    vision = build_provider_for_role(env, ROLE_VISION_EVENT)
+    strategy = build_provider_for_role(env, ROLE_HOOK_STRATEGY)
+    return vision, strategy
+
+
+def _run_two_pass_and_update(
+    report: dict[str, Any],
+    sheet_path: Path,
+    db_path: Path,
+) -> dict[str, Any]:
+    """Real two-pass run. Builds providers from env, runs Pass 1 and
+    Pass 2, merges into AnalysisResult, writes back to the row,
+    returns the merged-fields dict for printing."""
     env = load_env()
     try:
-        provider = build_default_provider(env)
+        vision_provider, strategy_provider = _build_pass_providers(env)
     except VisionProviderError as e:
         raise click.ClickException(str(e)) from e
-
-    click.echo(f"Calling vision model: {provider.model} via {provider.name}")
+    click.echo(
+        f"Pass 1 (visual event)  : {vision_provider.model}\n"
+        f"Pass 2 (hook strategy) : {strategy_provider.model}"
+    )
     click.echo("(Vision API may incur cost.)")
     try:
-        result = analysis_mod.analyze_contact_sheet_with_vision(
-            sheet_path, report, provider,
+        pass1, pass2 = analysis_mod.analyze_two_pass(
+            sheet_path, report, vision_provider, strategy_provider,
         )
     except VisionProviderError as e:
         raise click.ClickException(f"Vision provider failed: {e}") from e
     except ValueError as e:
         raise click.ClickException(f"Could not parse model output: {e}") from e
 
+    result = analysis_mod.build_two_pass_analysis_result(pass1, pass2)
     fields = {
         "visual_hook_summary": result.visual_hook_summary,
         "onscreen_text": result.onscreen_text,
@@ -356,14 +395,253 @@ def analyze_report_cmd(ctx: click.Context, report_id: str, dry_run: bool) -> Non
         "hook_mutations": result.hook_mutations,
         "raw_analysis": result.raw_analysis,
     }
-    if not update_report_analysis(paths.db_path, report_id, fields):
+    if not update_report_analysis(db_path, report["id"], fields):
         raise click.ClickException(
-            f"DB update failed for report {report_id} (row not found?)."
+            f"DB update failed for report {report['id']} (row not found?)."
         )
+    return fields
 
-    click.echo("\n=== Vision analysis ===")
+
+@cli.command("analyze-report")
+@click.argument("report_id")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print both Pass 1 and Pass 2 prompts, then exit. No API call.")
+@click.pass_context
+def analyze_report_cmd(ctx: click.Context, report_id: str, dry_run: bool) -> None:
+    """Re-run two-pass vision analysis on an existing report's contact
+    sheet and write the structured hook intelligence back into the row."""
+    paths = ctx.obj["paths"]
+    report = get_report(paths.db_path, report_id)
+    if not report:
+        raise click.ClickException(f"No report with id={report_id}")
+    sheet_path = _resolve_contact_sheet(report)
+
+    if dry_run:
+        _print_two_pass_dry_run(report, sheet_path)
+        return
+
+    fields = _run_two_pass_and_update(report, sheet_path, paths.db_path)
+    click.echo("\n=== Two-pass analysis ===")
     click.echo(json.dumps(fields, indent=2, ensure_ascii=False, sort_keys=True))
     click.echo(f"\nUpdated report {report_id}.")
+
+
+def _fmt_score(v: Any) -> str:
+    return f"{v:.2f}" if isinstance(v, (int, float)) else "—"
+
+
+def _print_final_report(report: dict[str, Any]) -> None:
+    """Concise markdown-ish summary for analyze-link."""
+    metrics = report.get("metrics") or {}
+    click.echo("\nEmotion Radar Report")
+    click.echo("=" * 60)
+    click.echo(f"Report ID:       {report.get('id')}")
+    click.echo(f"Source:          {report.get('source_url') or report.get('submitted_url')}")
+    creator = report.get("creator_username")
+    nickname = report.get("creator_nickname")
+    creator_line = f"@{creator}" + (f" ({nickname})" if nickname else "") if creator else "—"
+    click.echo(f"Creator:         {creator_line}")
+    click.echo(
+        "Engagement:      "
+        f"views={metrics.get('views')}  "
+        f"likes={metrics.get('likes')}  "
+        f"comments={metrics.get('comments')}  "
+        f"shares={metrics.get('shares')}  "
+        f"saves={metrics.get('saves')}"
+    )
+    click.echo(f"Contact Sheet:   {report.get('contact_sheet_path') or '—'}")
+    if report.get("error"):
+        click.echo(f"\nERROR: {report['error']}")
+        return
+
+    click.echo("")
+    click.echo(f"Visual Hook:        {report.get('visual_hook_summary') or '—'}")
+    click.echo(f"On-screen Text:     {report.get('onscreen_text') or '—'}")
+    click.echo(f"Emotional Mechanic: {report.get('emotional_mechanic') or '—'}")
+    click.echo(f"Viewer Role:        {report.get('viewer_role') or '—'}")
+    emotions = report.get("emotions_triggered") or []
+    if emotions:
+        click.echo(f"Emotions:           {', '.join(emotions)}")
+
+    click.echo("\nScores")
+    click.echo(f"  Freshness:            {_fmt_score(report.get('freshness_score'))}")
+    click.echo(f"  Cooked:               {_fmt_score(report.get('cooked_score'))}")
+    click.echo(f"  Transferability:      {_fmt_score(report.get('transferability_score'))}")
+    click.echo(f"  Product Attachability:{_fmt_score(report.get('product_attachability_score'))}")
+    click.echo(f"  Overall Opportunity:  {_fmt_score(report.get('overall_opportunity_score'))}")
+
+    mutations = report.get("hook_mutations") or []
+    by_type: dict[str, list[dict[str, Any]]] = {"safe": [], "fresh": [], "big_swing": []}
+    extras: list[dict[str, Any]] = []
+    for m in mutations:
+        if not isinstance(m, dict):
+            continue
+        t = (m.get("type") or "").strip().lower()
+        if t in by_type:
+            by_type[t].append(m)
+        else:
+            extras.append(m)
+
+    click.echo("\nHook Ideas")
+    for label, key in (("Safe", "safe"), ("Fresh", "fresh"), ("Big Swing", "big_swing")):
+        bucket = by_type[key]
+        click.echo(f"\n  -- {label} ({len(bucket)}) --")
+        if not bucket:
+            click.echo("    (none)")
+            continue
+        for i, m in enumerate(bucket, start=1):
+            click.echo(f"    {i}. {m.get('idea') or '(no idea)'}")
+            if m.get("opening_scene"):
+                click.echo(f"       opening_scene:   {m['opening_scene']}")
+            if m.get("onscreen_text"):
+                click.echo(f"       onscreen_text:   {m['onscreen_text']}")
+            if m.get("product_niche_fit"):
+                click.echo(f"       product/niche:   {m['product_niche_fit']}")
+            if m.get("why_it_might_work"):
+                click.echo(f"       why_it_works:    {m['why_it_might_work']}")
+            if m.get("cringe_or_cooked_risk"):
+                click.echo(f"       risk:            {m['cringe_or_cooked_risk']}")
+            if m.get("production_difficulty"):
+                click.echo(f"       difficulty:      {m['production_difficulty']}")
+    if extras:
+        click.echo(f"\n  -- Other ({len(extras)}, unrecognised type) --")
+        for m in extras:
+            click.echo(f"    - {m.get('idea') or m}")
+
+
+def _print_evaluation(
+    result: EvaluationResult,
+    spec_path: Path | str,
+    auto: bool,
+    actual_mechanic: str | None,
+) -> None:
+    click.echo("\nEvaluation")
+    label = " (auto, known video_id)" if auto else ""
+    status = "PASS" if result.passed else "FAIL"
+    click.echo(f"  status:    {status}{label}")
+    click.echo(f"  spec:      {spec_path}")
+    click.echo(
+        f"  required:  {len(result.required_terms_matched)}/{result.required_terms_total} matched"
+    )
+    if result.required_terms_missing:
+        click.echo("  missing terms:")
+        for term in result.required_terms_missing:
+            click.echo(f"    - {term}")
+    if result.forbidden_terms_present:
+        click.echo("  forbidden terms PRESENT (taste regression):")
+        for term in result.forbidden_terms_present:
+            click.echo(f"    ! {term}")
+    if result.expected_mechanic is not None:
+        verdict = "match" if result.mechanic_match else "MISMATCH"
+        click.echo(f"  expected_mechanic: {verdict}")
+        click.echo(f"    expected: {result.expected_mechanic}")
+        click.echo(f"    actual:   {actual_mechanic or '—'}")
+    if not result.passed:
+        click.echo("\nCalibration failed. Do not trust this report yet.", err=True)
+
+
+@cli.command("analyze-link")
+@click.argument("url")
+@click.option("--keep-temp", is_flag=True, default=False,
+              help="Keep raw MP4 and frame JPEGs after the contact sheet is built.")
+@click.option("--dry-run-vision", is_flag=True, default=False,
+              help="Run Apify/video/contact sheet, then print both vision prompts; no API call.")
+@click.option("--no-vision", is_flag=True, default=False,
+              help="Skip the vision passes entirely; produce only the infrastructure report stub.")
+@click.option("--skip-evaluation", is_flag=True, default=False,
+              help="Skip the calibration check, even for known video ids.")
+@click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
+              default=None, help="Calibration spec path (overrides any auto-fixture).")
+@click.pass_context
+def analyze_link_cmd(
+    ctx: click.Context,
+    url: str,
+    keep_temp: bool,
+    dry_run_vision: bool,
+    no_vision: bool,
+    skip_evaluation: bool,
+    expected_path: str | None,
+) -> None:
+    """One-shot: Apify -> contact sheet -> two-pass vision -> report.
+
+    The user supplies a single TikTok URL; everything else is automatic.
+    --dry-run-vision still runs Apify/video/contact sheet but skips the
+    vision API. --no-vision stops before the vision step. If the
+    analyzed video_id matches a known calibration fixture (e.g. the
+    Oliver HTTYD-lamp video), the spec is auto-evaluated unless
+    --skip-evaluation is passed."""
+    paths = ctx.obj["paths"]
+    enforce_url_cap([url], confirm_large=True)
+
+    # --- 1. Apify + video + contact sheet (report stub inserted in DB) ---
+    report_ids = _run_pipeline([url], paths, keep_temp=keep_temp)
+    if not report_ids:
+        raise click.ClickException("Pipeline produced no report.")
+    report_id = report_ids[0]
+    report = get_report(paths.db_path, report_id)
+    if not report:
+        raise click.ClickException(f"Could not load freshly-inserted report {report_id}.")
+
+    # --- 2. If the pipeline errored, surface and exit. ---
+    if report.get("error"):
+        click.echo(f"\nPipeline error: {report['error']}")
+        _print_final_report(report)
+        return
+
+    # --- 3. Decide on vision behavior. ---
+    if no_vision:
+        click.echo("\n--no-vision: skipping the two-pass analysis.")
+        _print_final_report(report)
+        return
+
+    sheet_path = _resolve_contact_sheet(report)
+
+    if dry_run_vision:
+        _print_two_pass_dry_run(report, sheet_path)
+        _print_final_report(report)
+        return
+
+    # --- 4. Two-pass vision + DB update. ---
+    _run_two_pass_and_update(report, sheet_path, paths.db_path)
+    final_report = get_report(paths.db_path, report_id)
+    if not final_report:
+        raise click.ClickException("Report disappeared mid-pipeline.")
+
+    # --- 5. Final summary. ---
+    _print_final_report(final_report)
+
+    # --- 6. Calibration. Manual --expected wins; otherwise auto on known ids. ---
+    if skip_evaluation:
+        click.echo("\n(--skip-evaluation: calibration check skipped)")
+        return
+
+    auto = False
+    spec_path: Path | None = None
+    if expected_path:
+        spec_path = Path(expected_path)
+    else:
+        video_id = (final_report.get("video_id") or "").strip()
+        fixture = KNOWN_FIXTURES.get(video_id)
+        if fixture and fixture.is_file():
+            spec_path = fixture
+            auto = True
+
+    if not spec_path:
+        return
+
+    try:
+        spec = load_expected(spec_path)
+    except (FileNotFoundError, ValueError) as e:
+        click.echo(f"\nCould not run evaluation: {e}", err=True)
+        return
+
+    eval_result = evaluate_report_fn(final_report, spec)
+    _print_evaluation(
+        eval_result,
+        spec_path=spec_path,
+        auto=auto,
+        actual_mechanic=final_report.get("emotional_mechanic"),
+    )
 
 
 @cli.command("evaluate-report")

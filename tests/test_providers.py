@@ -41,6 +41,57 @@ def test_explicit_model_wins():
     assert p.model == "my-custom-vision-model"
 
 
+def test_role_vision_event_picks_pass1_model_env_var():
+    env = {
+        "OPENAI_API_KEY": "sk-test",
+        "VISION_MODEL": "fallback-model",
+        "VISION_EVENT_MODEL": "pass1-strong-model",
+        "HOOK_STRATEGY_MODEL": "pass2-cheap-model",
+    }
+    p = providers.build_provider_for_role(env, providers.ROLE_VISION_EVENT)
+    assert p.model == "pass1-strong-model"
+
+
+def test_role_hook_strategy_picks_pass2_model_env_var():
+    env = {
+        "OPENAI_API_KEY": "sk-test",
+        "VISION_MODEL": "fallback-model",
+        "VISION_EVENT_MODEL": "pass1-strong-model",
+        "HOOK_STRATEGY_MODEL": "pass2-cheap-model",
+    }
+    p = providers.build_provider_for_role(env, providers.ROLE_HOOK_STRATEGY)
+    assert p.model == "pass2-cheap-model"
+
+
+def test_role_falls_back_to_vision_model():
+    env = {"OPENAI_API_KEY": "sk-test", "VISION_MODEL": "shared-model"}
+    p_event = providers.build_provider_for_role(env, providers.ROLE_VISION_EVENT)
+    p_strategy = providers.build_provider_for_role(env, providers.ROLE_HOOK_STRATEGY)
+    assert p_event.model == "shared-model"
+    assert p_strategy.model == "shared-model"
+
+
+def test_role_falls_back_to_default_when_nothing_set():
+    env = {"OPENAI_API_KEY": "sk-test"}
+    p = providers.build_provider_for_role(env, providers.ROLE_VISION_EVENT)
+    assert p.model == providers.DEFAULT_MODEL
+
+
+def test_role_unknown_raises():
+    with pytest.raises(ValueError):
+        providers.build_provider_for_role({"OPENAI_API_KEY": "sk-test"}, "nonsense_role")
+
+
+def test_model_override_wins_over_env():
+    env = {
+        "OPENAI_API_KEY": "sk-test",
+        "VISION_MODEL": "from-env",
+        "VISION_EVENT_MODEL": "from-role-env",
+    }
+    p = providers.build_default_provider(env, role=providers.ROLE_VISION_EVENT, model_override="from-arg")
+    assert p.model == "from-arg"
+
+
 def test_openai_key_preferred_over_openrouter_when_both_set():
     p = providers.build_default_provider({
         "OPENAI_API_KEY": "sk-test",
@@ -101,6 +152,23 @@ def test_openai_provider_puts_key_in_authorization_header(tmp_path):
     parts = msgs[1]["content"]
     assert any(part.get("type") == "image_url" for part in parts)
     assert any(part.get("type") == "text" for part in parts)
+
+
+def test_openai_provider_analyze_text_sends_no_image_url(tmp_path):
+    sess = _CapturingSession(response_text='{"ok": true}')
+    p = providers.OpenAICompatibleProvider(
+        api_key="sk-secret",
+        model="gpt-4o",
+        base_url="https://api.example.com/v1",
+        session=sess,
+    )
+    p.analyze_text("system", "user-text-only")
+    body = sess.calls[0]["json"]
+    msgs = body["messages"]
+    assert msgs[0]["role"] == "system"
+    assert msgs[1]["role"] == "user"
+    # text-only call must pass content as a plain string (not a parts array).
+    assert msgs[1]["content"] == "user-text-only"
 
 
 def test_openai_provider_raises_on_missing_image(tmp_path):

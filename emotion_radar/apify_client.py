@@ -2,7 +2,7 @@
 
 Why direct REST instead of the apify-client SDK: keeps deps tiny, makes
 behavior trivially mockable in tests, and the call surface we need is
-small (start actor → wait → fetch dataset items).
+small (start actor -> wait -> fetch dataset items).
 """
 
 from __future__ import annotations
