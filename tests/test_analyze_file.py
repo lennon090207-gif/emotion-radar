@@ -307,6 +307,182 @@ def test_frame_extraction_failure_lands_on_report_error(
 
 # ---- slug helper ----------------------------------------------------------
 
+# ---- Phase 7.1: relative path bug ------------------------------------------
+
+def test_analyze_file_relative_path_no_value_error(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Pre-fix this raised:
+        ValueError: relative path can't be expressed as a file URI
+    because _local_seed_report_stub called Path.as_uri() on a relative
+    path. Resolving to absolute first fixes it."""
+    video_dir = tmp_path / "videos"
+    video_dir.mkdir()
+    (video_dir / "rel.mp4").write_bytes(b"fake")
+
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+
+    monkeypatch.chdir(tmp_path)
+    result = _invoke(tmp_path, "analyze-file", "videos/rel.mp4", "--skip-evaluation")
+    assert result.exit_code == 0, result.output
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=10)
+    assert len(rows) == 1
+    # submitted_url is a proper file:// URI with absolute path embedded.
+    sub = rows[0]["submitted_url"]
+    assert sub.startswith("file://")
+    assert "rel.mp4" in sub
+    # original_local_path is the absolute resolved form.
+    meta = rows[0]["raw_analysis"]["source_metadata"]
+    assert Path(meta["original_local_path"]).is_absolute()
+
+
+# ---- Phase 7.1: --raw-output-on-parse-error --------------------------------
+
+def test_raw_output_flag_saves_debug_file_on_pass1_parse_failure(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Pass 1 returns garbage AND repair also fails. The CLI's
+    --raw-output-on-parse-error flag should drop the original raw
+    output to data/debug/model_outputs/ and surface a pass-labeled
+    error."""
+    video = _make_fake_video(tmp_path / "videos", "seed_clip.mp4")
+
+    bad_pass1 = "This is definitely not JSON, the model went off the rails."
+
+    class _MP:
+        name = "mock"
+        def __init__(self, label, image, text):
+            self.model = label; self._image = image; self._text = text
+        def analyze_image(self, *a, **kw):
+            return self._image
+        def analyze_text(self, *a, **kw):
+            return self._text
+
+    def _fake_build(env, role):
+        if role == "vision_event":
+            return _MP("v", bad_pass1, "")
+        # strategy provider's analyze_text is the repair target; return
+        # nonsense so repair ALSO fails and the original error surfaces.
+        return _MP("s", "", "still nonsense")
+
+    monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
+
+    result = _invoke(
+        tmp_path, "analyze-file", str(video),
+        "--skip-evaluation", "--raw-output-on-parse-error",
+    )
+    assert result.exit_code != 0  # propagates as ClickException
+    # Pass-labeled error message.
+    assert "Pass 1 visual event JSON parse failed" in result.output
+    # Path hint in the error message.
+    debug_root = tmp_path / "debug" / "model_outputs"
+    assert "data/debug/model_outputs" in result.output.replace("\\", "/") or str(debug_root) in result.output
+    # The debug file actually exists with the raw output.
+    matches = list(debug_root.glob("*_pass1_visual_event.txt"))
+    assert len(matches) == 1
+    assert matches[0].read_text(encoding="utf-8") == bad_pass1
+
+
+def test_raw_output_flag_off_does_not_save_debug_file(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Without the flag, parse failures still raise (with a pass label)
+    but no debug file is written."""
+    video = _make_fake_video(tmp_path / "videos", "seed_clip.mp4")
+
+    class _MP:
+        name = "mock"
+        def __init__(self, label, image, text):
+            self.model = label; self._image = image; self._text = text
+        def analyze_image(self, *a, **kw): return self._image
+        def analyze_text(self, *a, **kw): return self._text
+
+    def _fake_build(env, role):
+        if role == "vision_event":
+            return _MP("v", "garbage pass 1", "")
+        return _MP("s", "", "still nonsense")
+
+    monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
+
+    result = _invoke(tmp_path, "analyze-file", str(video), "--skip-evaluation")
+    assert result.exit_code != 0
+    assert "Pass 1 visual event JSON parse failed" in result.output
+    # No debug directory should exist.
+    debug_root = tmp_path / "debug" / "model_outputs"
+    assert not debug_root.exists()
+
+
+def test_pass2_parse_failure_labeled(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Pass 1 succeeds, Pass 2 returns garbage → error says Pass 2."""
+    video = _make_fake_video(tmp_path / "videos", "seed_clip.mp4")
+
+    class _MP:
+        name = "mock"
+        def __init__(self, label, image, texts):
+            self.model = label; self._image = image
+            self._texts = list(texts); self._i = 0
+        def analyze_image(self, *a, **kw): return self._image
+        def analyze_text(self, *a, **kw):
+            if self._i < len(self._texts):
+                r = self._texts[self._i]; self._i += 1; return r
+            return self._texts[-1]
+
+    def _fake_build(env, role):
+        if role == "vision_event":
+            return _MP("v", json.dumps(PASS1_OLIVER_GOOD), [""])
+        # Pass 2 returns garbage; repair also returns garbage.
+        return _MP("s", "", ["pass2 is not json", "still not json"])
+
+    monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
+
+    result = _invoke(
+        tmp_path, "analyze-file", str(video),
+        "--no-specificity", "--skip-evaluation",
+    )
+    assert result.exit_code != 0
+    assert "Pass 2 hook strategy JSON parse failed" in result.output
+
+
+def test_pass3_parse_failure_labeled(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Pass 1 + Pass 2 succeed, Pass 3 fails → error says Pass 3."""
+    video = _make_fake_video(tmp_path / "videos", "seed_clip.mp4")
+
+    class _MP:
+        name = "mock"
+        def __init__(self, label, image, texts):
+            self.model = label; self._image = image
+            self._texts = list(texts); self._i = 0
+        def analyze_image(self, *a, **kw): return self._image
+        def analyze_text(self, *a, **kw):
+            if self._i < len(self._texts):
+                r = self._texts[self._i]; self._i += 1; return r
+            return self._texts[-1]
+
+    def _fake_build(env, role):
+        if role == "vision_event":
+            return _MP("v", json.dumps(PASS1_OLIVER_GOOD), [""])
+        # Pass 2 fine; Pass 3 garbage; repair fails.
+        return _MP("s", "", [
+            json.dumps(PASS2_OLIVER_GOOD),
+            "pass 3 garbage",
+            "still garbage",
+        ])
+
+    monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
+
+    result = _invoke(tmp_path, "analyze-file", str(video), "--skip-evaluation")
+    assert result.exit_code != 0
+    assert "Pass 3 specificity JSON parse failed" in result.output
+
+
 def test_slugify_filename_collapses_specials():
     assert cli_mod._slugify_filename("My Cool Clip (final)") == "My_Cool_Clip_final"
     assert cli_mod._slugify_filename("video.123") == "video_123"

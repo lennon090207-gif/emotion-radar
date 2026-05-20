@@ -14,16 +14,44 @@ REQUIRED_FLOW_IDS = (
     "wrong_audience_right_tribe",
     "shock_problem_immediate_fix",
     "ethical_edge_vulnerability_sympathy_surge",
+    # Phase 7.1: added after live VPS test surfaced two flows the
+    # original library couldn't cover.
+    "direct_viewer_plea_social_contract",
+    "weirdness_curiosity_reveal_loop",
 )
 
 
-def test_library_has_exactly_eight_flows():
-    assert len(SF.STORY_FLOWS) == 8
+def test_library_has_the_expected_flow_count():
+    """Lets future phases add flows without breaking this test —
+    REQUIRED_FLOW_IDS is the authoritative list."""
+    assert len(SF.STORY_FLOWS) == len(REQUIRED_FLOW_IDS)
 
 
 def test_library_contains_all_required_ids():
     ids = {flow.id for flow in SF.STORY_FLOWS}
     assert ids == set(REQUIRED_FLOW_IDS)
+
+
+def test_library_includes_direct_viewer_plea_flow():
+    """Phase 7.1: this flow now covers 'please don't scroll' /
+    'stay 12 seconds' / 'could you be honest' hooks that previously
+    got misrouted to public_disrespect."""
+    flow = SF.STORY_FLOWS_BY_ID["direct_viewer_plea_social_contract"]
+    assert "Direct Viewer Plea" in flow.name
+    joined = " ".join(flow.example_labels).lower()
+    assert "please don't scroll" in joined
+    assert "stay 12 seconds" in joined
+    assert "could you be honest" in joined
+
+
+def test_library_includes_weirdness_curiosity_flow():
+    """Phase 7.1: covers 'No I'm not a NORMAL adult' + craft-process
+    curiosity-reveal hooks (the Download (2).mp4 misclassification on
+    the VPS)."""
+    flow = SF.STORY_FLOWS_BY_ID["weirdness_curiosity_reveal_loop"]
+    assert "Weirdness" in flow.name and "Curiosity" in flow.name
+    joined = " ".join(flow.example_labels).lower()
+    assert "normal" in joined
 
 
 def test_flow_ids_are_unique():

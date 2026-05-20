@@ -248,6 +248,67 @@ STORY_FLOWS: tuple[StoryFlow, ...] = (
             "mental illness / down syndrome fake-comment hook",
         ),
     ),
+    # Phase 7.1: added after live VPS testing surfaced two recurring
+    # flows that the original 8-flow library did not cover, causing
+    # mismatched assignments like a "please be honest" + curiosity
+    # reveal getting bucketed under public_disrespect_viewer_defense.
+    StoryFlow(
+        id="direct_viewer_plea_social_contract",
+        name="Direct Viewer Plea -> Tiny Social Contract",
+        steps=(
+            "creator tells viewer they can scroll OR asks them not to",
+            "viewer is given a tiny responsibility ('stay 12 seconds', 'be honest')",
+            "staying / commenting feels like helping",
+            "viewer watches to honor the implied social contract",
+        ),
+        emotional_physics=(
+            "moral pressure + tiny ask + curiosity gap; "
+            "the viewer is recruited as a participant, not a spectator"
+        ),
+        viewer_role="helper / supporter",
+        comment_trigger="urge to comment and reassure / validate / honor the ask",
+        share_trigger="low-effort visible support; share as a tiny good deed",
+        cooked_risk=(
+            "high if it uses 'please don't scroll', 'could you be honest', "
+            "'every comment helps' without a fresh twist; these phrasings "
+            "are widely cooked"
+        ),
+        ethical_risk_default=0.25,
+        example_labels=(
+            "please don't scroll",
+            "stay 12 seconds",
+            "could you be honest",
+            "every comment helps motivate him",
+        ),
+    ),
+    StoryFlow(
+        id="weirdness_curiosity_reveal_loop",
+        name="Weirdness / Not Normal -> Curiosity Reveal Loop",
+        steps=(
+            "creator frames themselves or the object as weird / not normal",
+            "viewer feels curiosity or low-key social judgment",
+            "the clip withholds the reveal (process, purpose, payoff)",
+            "viewer stays to understand what is being made or why it matters",
+        ),
+        emotional_physics=(
+            "self-othering + curiosity gap + reveal retention; "
+            "viewer must stay to resolve the 'what is this' question"
+        ),
+        viewer_role="curious observer / judge",
+        comment_trigger="urge to comment on weirdness, process, or final reveal",
+        share_trigger="send to someone who likes weird / satisfying-process clips",
+        cooked_risk=(
+            "medium-high if it collapses into generic 'I'm not normal' "
+            "bait without a real reveal"
+        ),
+        ethical_risk_default=0.20,
+        example_labels=(
+            "No I'm not a NORMAL adult",
+            "unusual craft process",
+            "strange materials",
+            "weird hand gestures with process reveal",
+        ),
+    ),
 )
 
 

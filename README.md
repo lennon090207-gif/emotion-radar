@@ -199,13 +199,34 @@ Supported extensions: `.mp4 .mov .m4v .webm`.
 ```bash
 pip install gdown
 
-# Public folder URL goes here. --remaining-ok lets gdown skip files it
-# can't fetch (e.g. items requiring auth) rather than aborting.
+# Public folder URL goes here. Older gdown releases (e.g. the version
+# currently in pypi) do NOT support --remaining-ok, so we omit it. If
+# your gdown supports it (newer fork), add --remaining-ok to skip
+# files it can't fetch rather than aborting; otherwise gdown will
+# stop on the first unfetchable item.
 gdown --folder "https://drive.google.com/drive/folders/<FOLDER_ID>" \
-  -O data/imports/friend_drive --remaining-ok
+  -O data/imports/friend_drive
 
+# Relative paths now work too (Phase 7.1 fix). Both of these are fine:
 python -m emotion_radar analyze-folder data/imports/friend_drive --limit 10
+python -m emotion_radar analyze-folder ./data/imports/friend_drive --limit 10
 ```
+
+### Debugging model parse failures
+
+If Pass 2 / Pass 3 frequently fails JSON parsing on live seed clips,
+add `--raw-output-on-parse-error` to dump the offending raw model
+output to `data/debug/model_outputs/<report_id>_<pass>.txt` so you
+can inspect what the model actually returned:
+
+```bash
+python -m emotion_radar analyze-folder data/imports/friend_drive \
+  --limit 10 --raw-output-on-parse-error
+```
+
+Errors that previously read `Could not parse model output: ...` now
+identify which pass failed: `Pass 2 hook strategy JSON parse
+failed: ...` or `Pass 3 specificity JSON parse failed: ...`.
 
 #### analyze-folder behavior
 

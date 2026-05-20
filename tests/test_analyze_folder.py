@@ -241,6 +241,33 @@ def test_analyze_folder_does_not_auto_evaluate_per_file(
     assert "Evaluation" not in result.output
 
 
+# ---- Phase 7.1: relative-path bug ------------------------------------------
+
+def test_analyze_folder_relative_path_no_value_error(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """Pre-fix: analyze-folder with a relative path raised
+        ValueError: relative path can't be expressed as a file URI
+    when _local_seed_report_stub tried .as_uri() on each file."""
+    folder = _make_folder(tmp_path, ["a.mp4", "b.mp4"])
+
+    _patch_providers(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        pass2_text=json.dumps(PASS2_OLIVER_GOOD),
+    )
+
+    monkeypatch.chdir(tmp_path)
+    result = _invoke(tmp_path, "analyze-folder", "drive")
+    assert result.exit_code == 0, result.output
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=10)
+    assert len(rows) == 2
+    for r in rows:
+        # Every submitted_url resolved to an absolute file:// URI.
+        assert r["submitted_url"].startswith("file://")
+        assert Path(r["raw_analysis"]["source_metadata"]["original_local_path"]).is_absolute()
+
+
 def test_analyze_folder_processes_files_in_sorted_order(
     mock_local_infrastructure, monkeypatch, tmp_path: Path,
 ):

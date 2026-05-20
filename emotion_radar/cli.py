@@ -430,10 +430,27 @@ def _carry_source_metadata(previous_report: dict[str, Any], fields: dict[str, An
     new_raw["source_metadata"] = prev_meta
 
 
+def _debug_paths_for(
+    data_dir: Path, report_id: str, raw_output_on_parse_error: bool, num_passes: int,
+) -> tuple[Path | None, Path | None, Path | None]:
+    """Compute the (pass1, pass2, pass3) debug file paths under
+    data/debug/model_outputs/. Returns (None, None, None) when the flag
+    is off. Phase 7.1: --raw-output-on-parse-error."""
+    if not raw_output_on_parse_error:
+        return (None, None, None)
+    base = Path(data_dir) / "debug" / "model_outputs"
+    p1 = base / f"{report_id}_pass1_visual_event.txt"
+    p2 = base / f"{report_id}_pass2_hook_strategy.txt"
+    p3 = base / f"{report_id}_pass3_specificity.txt" if num_passes >= 3 else None
+    return (p1, p2, p3)
+
+
 def _run_two_pass_and_update(
     report: dict[str, Any],
     sheet_path: Path,
     db_path: Path,
+    raw_output_on_parse_error: bool = False,
+    data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Two-pass run (Pass 1 + Pass 2 only). Used when the user passes
     --no-specificity for debugging. The default analyze-link /
@@ -448,9 +465,16 @@ def _run_two_pass_and_update(
         f"Pass 2 (hook strategy) : {strategy_provider.model}"
     )
     click.echo("(Vision API may incur cost.)")
+
+    debug_p1, debug_p2, _ = _debug_paths_for(
+        data_dir or Path("data"), report["id"], raw_output_on_parse_error, num_passes=2,
+    )
+
     try:
         pass1, pass2 = analysis_mod.analyze_two_pass(
             sheet_path, report, vision_provider, strategy_provider,
+            debug_pass1_path=debug_p1,
+            debug_pass2_path=debug_p2,
         )
     except VisionProviderError as e:
         raise click.ClickException(f"Vision provider failed: {e}") from e
@@ -470,6 +494,8 @@ def _run_three_pass_and_update(
     report: dict[str, Any],
     sheet_path: Path,
     db_path: Path,
+    raw_output_on_parse_error: bool = False,
+    data_dir: Path | None = None,
 ) -> dict[str, Any]:
     """Default flow: Pass 1 + Pass 2 + Pass 3 (specificity rewrite).
     Pass 3 is conditioned on the user's stored taste profile if any
@@ -490,10 +516,17 @@ def _run_three_pass_and_update(
         click.echo("(Pass 3 will be conditioned on stored taste feedback.)")
     click.echo("(Vision API may incur cost.)")
 
+    debug_p1, debug_p2, debug_p3 = _debug_paths_for(
+        data_dir or Path("data"), report["id"], raw_output_on_parse_error, num_passes=3,
+    )
+
     try:
         pass1, pass2, pass3 = analysis_mod.analyze_three_pass(
             sheet_path, report, vision_provider, strategy_provider,
             taste_profile=taste,
+            debug_pass1_path=debug_p1,
+            debug_pass2_path=debug_p2,
+            debug_pass3_path=debug_p3,
         )
     except VisionProviderError as e:
         raise click.ClickException(f"Vision provider failed: {e}") from e
@@ -517,9 +550,12 @@ def _run_three_pass_and_update(
               help="Print Pass 1 / 2 / 3 prompts, then exit. No API call.")
 @click.option("--no-specificity", is_flag=True, default=False,
               help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
+@click.option("--raw-output-on-parse-error", is_flag=True, default=False,
+              help="On parse failure, save the raw model output to data/debug/model_outputs/ for inspection.")
 @click.pass_context
 def analyze_report_cmd(
     ctx: click.Context, report_id: str, dry_run: bool, no_specificity: bool,
+    raw_output_on_parse_error: bool,
 ) -> None:
     """Re-run vision analysis on an existing report's contact sheet and
     write the structured hook intelligence back into the row. Defaults
@@ -537,10 +573,18 @@ def analyze_report_cmd(
         return
 
     if no_specificity:
-        fields = _run_two_pass_and_update(report, sheet_path, paths.db_path)
+        fields = _run_two_pass_and_update(
+            report, sheet_path, paths.db_path,
+            raw_output_on_parse_error=raw_output_on_parse_error,
+            data_dir=paths.data_dir,
+        )
         click.echo("\n=== Two-pass analysis ===")
     else:
-        fields = _run_three_pass_and_update(report, sheet_path, paths.db_path)
+        fields = _run_three_pass_and_update(
+            report, sheet_path, paths.db_path,
+            raw_output_on_parse_error=raw_output_on_parse_error,
+            data_dir=paths.data_dir,
+        )
         click.echo("\n=== Three-pass analysis ===")
     click.echo(json.dumps(fields, indent=2, ensure_ascii=False, sort_keys=True))
     click.echo(f"\nUpdated report {report_id}.")
@@ -876,7 +920,11 @@ def _slugify_filename(stem: str) -> str:
 def _find_video_files(folder: Path, recursive: bool = False) -> list[Path]:
     """Find supported video files in `folder`. Non-recursive by default
     (matches the documented analyze-folder behavior). Results sorted by
-    filename so per-run order is deterministic."""
+    filename so per-run order is deterministic.
+
+    Resolves the folder to an absolute path first so downstream
+    .as_uri() calls don't crash on relative inputs (Phase 7.1)."""
+    folder = folder.resolve()
     iterator = folder.rglob("*") if recursive else folder.iterdir()
     matched: list[Path] = []
     for p in iterator:
@@ -891,7 +939,12 @@ def _find_video_files(folder: Path, recursive: bool = False) -> list[Path]:
 def _local_seed_report_stub(video_path: Path) -> dict[str, Any]:
     """Build the report dict for a local-seed-clip report row. No Apify
     fields. source_metadata lives under raw_analysis so subsequent
-    vision passes can preserve it through the merge."""
+    vision passes can preserve it through the merge.
+
+    Note: Path.as_uri() raises ValueError on relative paths, so we
+    resolve to an absolute path here. Phase 7.1 bug fix — analyze-folder
+    with a relative folder argument was crashing on this."""
+    video_path = video_path.resolve()
     source_metadata = {
         "source_type": "drive_seed_clip",
         "source_filename": video_path.name,
@@ -935,8 +988,13 @@ def _ingest_local_video(
     """Build the frames + contact sheet for a local video and insert a
     stub report row. Returns the new report_id. Errors during frame
     extraction land on the report's `error` field; the row is still
-    inserted so the user can see what happened."""
+    inserted so the user can see what happened.
+
+    Always resolves `video_path` to absolute before any further use —
+    .as_uri() raises ValueError on relatives and PIL/ffmpeg both
+    prefer absolute paths."""
     paths.ensure()
+    video_path = Path(video_path).resolve()
     report = _local_seed_report_stub(video_path)
     video_id = report["video_id"]
     frames_dir = paths.tmp_frames_dir / video_id
@@ -971,6 +1029,7 @@ def _run_vision_phase_for_report(
     skip_evaluation: bool,
     expected_path: str | None,
     auto_fixture_lookup: bool = True,
+    raw_output_on_parse_error: bool = False,
 ) -> None:
     """The shared "post-infrastructure" half used by analyze-link,
     analyze-file, and analyze-folder. Loads the report by id, decides
@@ -1004,9 +1063,17 @@ def _run_vision_phase_for_report(
         return
 
     if no_specificity:
-        _run_two_pass_and_update(report, sheet_path, paths.db_path)
+        _run_two_pass_and_update(
+            report, sheet_path, paths.db_path,
+            raw_output_on_parse_error=raw_output_on_parse_error,
+            data_dir=paths.data_dir,
+        )
     else:
-        _run_three_pass_and_update(report, sheet_path, paths.db_path)
+        _run_three_pass_and_update(
+            report, sheet_path, paths.db_path,
+            raw_output_on_parse_error=raw_output_on_parse_error,
+            data_dir=paths.data_dir,
+        )
 
     final_report = get_report(paths.db_path, report_id)
     if not final_report:
@@ -1104,6 +1171,8 @@ def _print_batch_summary(
               help="Skip the calibration check, even for known video ids.")
 @click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
               default=None, help="Calibration spec path.")
+@click.option("--raw-output-on-parse-error", is_flag=True, default=False,
+              help="On parse failure, save the raw model output to data/debug/model_outputs/ for inspection.")
 @click.pass_context
 def analyze_file_cmd(
     ctx: click.Context,
@@ -1114,6 +1183,7 @@ def analyze_file_cmd(
     no_specificity: bool,
     skip_evaluation: bool,
     expected_path: str | None,
+    raw_output_on_parse_error: bool,
 ) -> None:
     """Analyze ONE local video file with the three-pass pipeline. No
     Apify. Used for Drive seed clips and other local sources."""
@@ -1138,6 +1208,7 @@ def analyze_file_cmd(
         skip_evaluation=skip_evaluation,
         expected_path=expected_path,
         auto_fixture_lookup=True,
+        raw_output_on_parse_error=raw_output_on_parse_error,
     )
 
 
@@ -1153,6 +1224,8 @@ def analyze_file_cmd(
               help="Skip the vision passes entirely; produce only stubs.")
 @click.option("--no-specificity", is_flag=True, default=False,
               help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
+@click.option("--raw-output-on-parse-error", is_flag=True, default=False,
+              help="On parse failure, save the raw model output to data/debug/model_outputs/ for inspection.")
 @click.pass_context
 def analyze_folder_cmd(
     ctx: click.Context,
@@ -1162,6 +1235,7 @@ def analyze_folder_cmd(
     keep_temp: bool,
     no_vision: bool,
     no_specificity: bool,
+    raw_output_on_parse_error: bool,
 ) -> None:
     """Analyze multiple local video files (Drive seed clips) in a folder.
     Sorted by filename for deterministic order. Continues on per-file
@@ -1208,6 +1282,7 @@ def analyze_folder_cmd(
                 skip_evaluation=False,
                 expected_path=None,
                 auto_fixture_lookup=False,
+                raw_output_on_parse_error=raw_output_on_parse_error,
             )
             report_ids.append(report_id)
         except click.ClickException as e:
@@ -1234,6 +1309,8 @@ def analyze_folder_cmd(
               help="Skip the calibration check, even for known video ids.")
 @click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
               default=None, help="Calibration spec path (overrides any auto-fixture).")
+@click.option("--raw-output-on-parse-error", is_flag=True, default=False,
+              help="On parse failure, save the raw model output to data/debug/model_outputs/ for inspection.")
 @click.pass_context
 def analyze_link_cmd(
     ctx: click.Context,
@@ -1244,6 +1321,7 @@ def analyze_link_cmd(
     no_specificity: bool,
     skip_evaluation: bool,
     expected_path: str | None,
+    raw_output_on_parse_error: bool,
 ) -> None:
     """One-shot: Apify -> contact sheet -> two-pass vision -> report.
 
@@ -1274,6 +1352,7 @@ def analyze_link_cmd(
         skip_evaluation=skip_evaluation,
         expected_path=expected_path,
         auto_fixture_lookup=True,
+        raw_output_on_parse_error=raw_output_on_parse_error,
     )
 
 

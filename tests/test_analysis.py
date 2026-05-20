@@ -241,7 +241,7 @@ def test_pass2_prompt_lists_virality_focused_scores():
 
 # --- Phase 5: Story Flow Library, Variations, Pioneer Concepts -------------
 
-def test_pass2_prompt_includes_all_eight_story_flow_names():
+def test_pass2_prompt_includes_all_story_flow_names():
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
     expected_names = (
         "Public Disrespect -> Viewer Defense",
@@ -252,12 +252,15 @@ def test_pass2_prompt_includes_all_eight_story_flow_names():
         "Wrong Audience -> Right Tribe",
         "Shock Problem -> Immediate Fix",
         "Ethical Edge Vulnerability -> Sympathy Surge",
+        # Phase 7.1
+        "Direct Viewer Plea -> Tiny Social Contract",
+        "Weirdness / Not Normal -> Curiosity Reveal Loop",
     )
     for name in expected_names:
         assert name in sp, f"story flow name missing in prompt: {name}"
 
 
-def test_pass2_prompt_includes_all_eight_story_flow_ids():
+def test_pass2_prompt_includes_all_story_flow_ids():
     sp = A.HOOK_STRATEGY_SYSTEM_PROMPT
     expected_ids = (
         "public_disrespect_viewer_defense",
@@ -268,6 +271,9 @@ def test_pass2_prompt_includes_all_eight_story_flow_ids():
         "wrong_audience_right_tribe",
         "shock_problem_immediate_fix",
         "ethical_edge_vulnerability_sympathy_surge",
+        # Phase 7.1
+        "direct_viewer_plea_social_contract",
+        "weirdness_curiosity_reveal_loop",
     )
     for fid in expected_ids:
         assert fid in sp, f"story flow id missing in prompt: {fid}"

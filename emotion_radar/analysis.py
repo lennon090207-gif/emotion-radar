@@ -556,10 +556,24 @@ def _coerce_str_or_none(v: Any) -> str | None:
 # ============================================================================
 
 _REPAIR_SYSTEM_PROMPT = (
-    "You convert near-JSON to strict JSON. The user message contains text "
-    "that was supposed to be a single JSON object but isn't (extra prose, "
-    "fences, trailing commas, unescaped quotes, etc.). Return ONLY a single "
-    "valid JSON object reflecting the same data. No prose. No markdown "
+    "You repair near-JSON into strict JSON. The user message contains text "
+    "that was supposed to be a single JSON object but has problems: prose "
+    "wrappers, markdown fences, missing commas, unclosed brackets, "
+    "trailing commas, unescaped quotes inside strings, or truncated tails.\n"
+    "\n"
+    "Your job:\n"
+    "1. Identify the intended JSON object boundary.\n"
+    "2. Repair syntactic errors:\n"
+    "   - insert missing commas between key/value pairs,\n"
+    "   - close any unclosed '{', '[', or '\"' brackets,\n"
+    "   - drop trailing commas inside objects/arrays,\n"
+    "   - escape stray double-quote characters inside string values.\n"
+    "3. Preserve every key and value from the input verbatim where "
+    "possible. Do NOT invent fields or values that are not present.\n"
+    "4. If the input is severely truncated, close brackets at the latest "
+    "plausible point even if some fields are incomplete. Do not fabricate "
+    "values for missing fields.\n"
+    "5. Return ONLY the repaired JSON object. No prose. No markdown "
     "fences. No commentary."
 )
 
@@ -585,25 +599,48 @@ def _parse_or_repair(raw: str, repair_provider: VisionProvider | None) -> dict[s
             raise first_err
 
 
+def _save_raw_on_parse_failure(raw: str, debug_save_path: Path | None) -> str:
+    """Write `raw` to `debug_save_path` and return a short note for the
+    error message. Best-effort: a save failure produces a different
+    note but never masks the original parse error."""
+    if debug_save_path is None:
+        return ""
+    try:
+        debug_save_path.parent.mkdir(parents=True, exist_ok=True)
+        debug_save_path.write_text(raw or "", encoding="utf-8")
+        return f" Raw model output saved to {debug_save_path}."
+    except OSError as save_err:
+        return f" Failed to save raw model output: {save_err}."
+
+
 def extract_visual_event(
     contact_sheet_path: Path,
     metadata: dict[str, Any],
     provider: VisionProvider,
     repair_provider: VisionProvider | None = None,
+    debug_save_path: Path | None = None,
 ) -> dict[str, Any]:
     """Pass 1. Returns the parsed JSON dict (not an AnalysisResult).
 
     `repair_provider` (text-only) is given one shot to fix near-JSON if
     the initial parse fails. Defaults to the same provider that
     produced the vision output; callers can pass a separate cheaper
-    text model if they want."""
+    text model if they want.
+
+    `debug_save_path`, when set, saves the raw model output (the
+    pre-repair text) on parse failure. The path appears in the raised
+    error message so the human knows where to look."""
     user_prompt = build_visual_event_user_prompt(metadata)
     raw = provider.analyze_image(
         contact_sheet_path,
         VISUAL_EVENT_SYSTEM_PROMPT,
         user_prompt,
     )
-    return _parse_or_repair(raw, repair_provider or provider)
+    try:
+        return _parse_or_repair(raw, repair_provider or provider)
+    except ValueError as e:
+        hint = _save_raw_on_parse_failure(raw, debug_save_path)
+        raise ValueError(f"Pass 1 visual event JSON parse failed: {e}{hint}") from e
 
 
 def generate_hook_strategy(
@@ -611,6 +648,7 @@ def generate_hook_strategy(
     pass1_result: dict[str, Any],
     provider: VisionProvider,
     repair_provider: VisionProvider | None = None,
+    debug_save_path: Path | None = None,
 ) -> dict[str, Any]:
     """Pass 2. Text-only — consumes Pass 1's JSON evidence layer."""
     user_prompt = build_hook_strategy_user_prompt(metadata, pass1_result)
@@ -618,7 +656,11 @@ def generate_hook_strategy(
         HOOK_STRATEGY_SYSTEM_PROMPT,
         user_prompt,
     )
-    return _parse_or_repair(raw, repair_provider or provider)
+    try:
+        return _parse_or_repair(raw, repair_provider or provider)
+    except ValueError as e:
+        hint = _save_raw_on_parse_failure(raw, debug_save_path)
+        raise ValueError(f"Pass 2 hook strategy JSON parse failed: {e}{hint}") from e
 
 
 def analyze_two_pass(
@@ -626,6 +668,8 @@ def analyze_two_pass(
     metadata: dict[str, Any],
     vision_provider: VisionProvider,
     strategy_provider: VisionProvider | None = None,
+    debug_pass1_path: Path | None = None,
+    debug_pass2_path: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
     """Run Pass 1 -> Pass 2 and return both parsed JSON dicts.
     `strategy_provider` defaults to `vision_provider` (same model for
@@ -637,8 +681,12 @@ def analyze_two_pass(
     sp = strategy_provider or vision_provider
     pass1 = extract_visual_event(
         contact_sheet_path, metadata, vision_provider, repair_provider=sp,
+        debug_save_path=debug_pass1_path,
     )
-    pass2 = generate_hook_strategy(metadata, pass1, sp, repair_provider=sp)
+    pass2 = generate_hook_strategy(
+        metadata, pass1, sp, repair_provider=sp,
+        debug_save_path=debug_pass2_path,
+    )
     return pass1, pass2
 
 
@@ -842,12 +890,17 @@ def run_specificity_pass(
     provider: VisionProvider,
     taste_profile: str | None = None,
     repair_provider: VisionProvider | None = None,
+    debug_save_path: Path | None = None,
 ) -> dict[str, Any]:
     """Pass 3. Text-only. Consumes Pass 1 + Pass 2 and returns
     {specificity_notes, weak_patterns_fixed, scene_concepts}."""
     user_prompt = build_specificity_user_prompt(pass1_result, pass2_result, taste_profile)
     raw = provider.analyze_text(SPECIFICITY_SYSTEM_PROMPT, user_prompt)
-    return _parse_or_repair(raw, repair_provider or provider)
+    try:
+        return _parse_or_repair(raw, repair_provider or provider)
+    except ValueError as e:
+        hint = _save_raw_on_parse_failure(raw, debug_save_path)
+        raise ValueError(f"Pass 3 specificity JSON parse failed: {e}{hint}") from e
 
 
 def analyze_three_pass(
@@ -856,6 +909,9 @@ def analyze_three_pass(
     vision_provider: VisionProvider,
     strategy_provider: VisionProvider | None = None,
     taste_profile: str | None = None,
+    debug_pass1_path: Path | None = None,
+    debug_pass2_path: Path | None = None,
+    debug_pass3_path: Path | None = None,
 ) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
     """Pass 1 -> Pass 2 -> Pass 3. Returns all three parsed JSON dicts.
 
@@ -863,14 +919,22 @@ def analyze_three_pass(
     It also acts as the repair provider for Pass 1's parse failures.
 
     `taste_profile` is an optional summary built from stored feedback
-    (db.build_taste_summary). When provided, it conditions Pass 3 only."""
+    (db.build_taste_summary). When provided, it conditions Pass 3 only.
+
+    `debug_*_path`, when set, capture the raw model output for that pass
+    on parse failure. The path appears in the raised error message."""
     sp = strategy_provider or vision_provider
     pass1 = extract_visual_event(
         contact_sheet_path, metadata, vision_provider, repair_provider=sp,
+        debug_save_path=debug_pass1_path,
     )
-    pass2 = generate_hook_strategy(metadata, pass1, sp, repair_provider=sp)
+    pass2 = generate_hook_strategy(
+        metadata, pass1, sp, repair_provider=sp,
+        debug_save_path=debug_pass2_path,
+    )
     pass3 = run_specificity_pass(
         pass1, pass2, sp, taste_profile=taste_profile, repair_provider=sp,
+        debug_save_path=debug_pass3_path,
     )
     return pass1, pass2, pass3
 
