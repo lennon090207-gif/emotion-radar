@@ -59,7 +59,7 @@ class AnalysisResult:
     freshness_score: float | None = None
     cooked_score: float | None = None
     overall_opportunity_score: float | None = None
-    hook_mutations: list[str] = field(default_factory=list)
+    hook_mutations: list[Any] = field(default_factory=list)
     raw_analysis: dict[str, Any] = field(default_factory=dict)
 
     def to_dict(self) -> dict[str, Any]:

@@ -187,6 +187,60 @@ def list_reports(db_path: Path | str, limit: int = 50) -> list[dict[str, Any]]:
         return [_row_to_report(r) for r in cur.fetchall()]
 
 
+_ANALYSIS_COLUMNS = (
+    "visual_hook_summary",
+    "onscreen_text",
+    "emotional_mechanic",
+    "viewer_role",
+    "product_attachability_score",
+    "transferability_score",
+    "freshness_score",
+    "cooked_score",
+    "overall_opportunity_score",
+)
+
+_ANALYSIS_JSON_COLUMNS = {
+    "emotions_triggered": "emotions_triggered_json",
+    "hook_mutations": "hook_mutations_json",
+    "raw_analysis": "raw_analysis_json",
+}
+
+
+def update_report_analysis(
+    db_path: Path | str,
+    report_id: str,
+    analysis_fields: dict[str, Any],
+) -> bool:
+    """Update the analysis-related columns on a single report row.
+    Returns True if the row existed and was updated, False otherwise.
+
+    Only known analysis keys are written; unknown keys are ignored so a
+    future schema bump can't accidentally leak free-form fields into the
+    DB. `raw_analysis`, `emotions_triggered`, and `hook_mutations` are
+    JSON-encoded into their `*_json` columns."""
+    init_db(db_path)
+    sets: list[str] = []
+    params: dict[str, Any] = {"id": report_id}
+
+    for col in _ANALYSIS_COLUMNS:
+        if col in analysis_fields:
+            sets.append(f"{col} = :{col}")
+            params[col] = analysis_fields[col]
+
+    for src_key, db_col in _ANALYSIS_JSON_COLUMNS.items():
+        if src_key in analysis_fields:
+            sets.append(f"{db_col} = :{db_col}")
+            params[db_col] = _dump_json(analysis_fields[src_key])
+
+    if not sets:
+        return False  # nothing to do; treat as no-op rather than an error
+
+    sql = f"UPDATE reports SET {', '.join(sets)} WHERE id = :id"
+    with connect(db_path) as conn:
+        cur = conn.execute(sql, params)
+        return cur.rowcount > 0
+
+
 def get_report(db_path: Path | str, report_id: str) -> dict[str, Any] | None:
     init_db(db_path)
     with connect(db_path) as conn:

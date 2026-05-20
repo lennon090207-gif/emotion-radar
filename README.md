@@ -62,6 +62,20 @@ The client reads `APIFY_TOKEN` from:
 
 `.env.example` shows the expected format. Never commit `.env`.
 
+### 4. Vision API key (Phase 2)
+
+`analyze-report` needs a vision-capable LLM. Set ONE of:
+
+- `OPENAI_API_KEY` — uses `https://api.openai.com/v1` by default.
+- `OPENROUTER_API_KEY` — uses `https://openrouter.ai/api/v1` by default.
+
+Optional overrides:
+
+- `OPENAI_BASE_URL` — point at any OpenAI-compatible endpoint.
+- `VISION_MODEL` — defaults to `gpt-4o`. Set to whatever vision-capable model your provider exposes.
+
+Same resolution order as `APIFY_TOKEN` (env → `/root/.hermes/.env` → `./.env`). Keys are never logged or printed.
+
 ## Commands
 
 ```bash
@@ -76,6 +90,10 @@ python -m emotion_radar list-reports
 
 # show one report as pretty JSON
 python -m emotion_radar show-report REPORT_ID
+
+# run vision analysis on an existing report's contact sheet
+python -m emotion_radar analyze-report REPORT_ID
+python -m emotion_radar analyze-report REPORT_ID --dry-run   # print prompt only, no API call
 
 # delete old temp videos and frames (contact sheets are preserved)
 python -m emotion_radar cleanup-temp

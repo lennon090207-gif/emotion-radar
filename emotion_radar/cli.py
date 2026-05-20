@@ -38,8 +38,9 @@ from .config import (
     load_env,
     resolve_paths,
 )
-from .db import insert_report, get_report, list_reports
+from .db import get_report, insert_report, list_reports, update_report_analysis
 from .models import NormalizedItem
+from .providers import VisionProviderError, build_default_provider
 from .video import build_contact_sheet, download_video, extract_frames, VideoError
 
 
@@ -284,6 +285,84 @@ def show_report_cmd(ctx: click.Context, report_id: str) -> None:
     if not report:
         raise click.ClickException(f"No report with id={report_id}")
     click.echo(json.dumps(report, indent=2, ensure_ascii=False, sort_keys=True))
+
+
+@cli.command("analyze-report")
+@click.argument("report_id")
+@click.option("--dry-run", is_flag=True, default=False,
+              help="Print the prompt the model would receive, then exit. No API call.")
+@click.pass_context
+def analyze_report_cmd(ctx: click.Context, report_id: str, dry_run: bool) -> None:
+    """Run vision analysis on an existing report's contact sheet and
+    write the structured hook intelligence back into the row."""
+    paths = ctx.obj["paths"]
+    report = get_report(paths.db_path, report_id)
+    if not report:
+        raise click.ClickException(f"No report with id={report_id}")
+
+    sheet_str = report.get("contact_sheet_path")
+    if not sheet_str:
+        raise click.ClickException(
+            f"Report {report_id} has no contact_sheet_path. "
+            f"Re-run analyze-url for this URL first."
+        )
+    sheet_path = Path(sheet_str)
+    if not sheet_path.is_file():
+        raise click.ClickException(
+            f"Contact sheet missing on disk: {sheet_path}. "
+            f"Re-run analyze-url to regenerate it."
+        )
+
+    user_prompt = analysis_mod.build_user_prompt(report)
+
+    if dry_run:
+        click.echo("=== SYSTEM PROMPT ===")
+        click.echo(analysis_mod.SYSTEM_PROMPT)
+        click.echo("\n=== USER PROMPT ===")
+        click.echo(user_prompt)
+        click.echo(f"\n=== IMAGE ===\n{sheet_path}")
+        click.echo("\n(dry-run: no API call made)")
+        return
+
+    env = load_env()
+    try:
+        provider = build_default_provider(env)
+    except VisionProviderError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(f"Calling vision model: {provider.model} via {provider.name}")
+    click.echo("(Vision API may incur cost.)")
+    try:
+        result = analysis_mod.analyze_contact_sheet_with_vision(
+            sheet_path, report, provider,
+        )
+    except VisionProviderError as e:
+        raise click.ClickException(f"Vision provider failed: {e}") from e
+    except ValueError as e:
+        raise click.ClickException(f"Could not parse model output: {e}") from e
+
+    fields = {
+        "visual_hook_summary": result.visual_hook_summary,
+        "onscreen_text": result.onscreen_text,
+        "emotional_mechanic": result.emotional_mechanic,
+        "viewer_role": result.viewer_role,
+        "emotions_triggered": result.emotions_triggered,
+        "product_attachability_score": result.product_attachability_score,
+        "transferability_score": result.transferability_score,
+        "freshness_score": result.freshness_score,
+        "cooked_score": result.cooked_score,
+        "overall_opportunity_score": result.overall_opportunity_score,
+        "hook_mutations": result.hook_mutations,
+        "raw_analysis": result.raw_analysis,
+    }
+    if not update_report_analysis(paths.db_path, report_id, fields):
+        raise click.ClickException(
+            f"DB update failed for report {report_id} (row not found?)."
+        )
+
+    click.echo("\n=== Vision analysis ===")
+    click.echo(json.dumps(fields, indent=2, ensure_ascii=False, sort_keys=True))
+    click.echo(f"\nUpdated report {report_id}.")
 
 
 @cli.command("cleanup-temp")
