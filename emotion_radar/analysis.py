@@ -642,6 +642,268 @@ def analyze_two_pass(
     return pass1, pass2
 
 
+# ============================================================================
+# Pass 3 — Specificity / Hook Scene Writer (Phase 6)
+# ============================================================================
+
+SPECIFICITY_SYSTEM_PROMPT = """You are a specificity rewriter for short-form video hooks.
+
+You receive:
+  - Pass 1's frame-by-frame visual evidence (ground truth about the source video),
+  - Pass 2's hook strategy: matched story flows, variations, pioneer concepts,
+  - optionally, the user's taste profile from prior ratings.
+
+Your job is to rewrite Pass 2's variations and pioneer_concepts into SPECIFIC, FILMABLE, NATIVE first-2-second hook scenes. You are NOT a strategist. You are a scene writer. The story flow and viral mechanic stay; what you change is the level of detail.
+
+# What you must NOT do
+
+- Do NOT change the underlying story_flow_id of a concept. The Pass 2 mapping survives.
+- Do NOT generate images or videos.
+- Do NOT introduce product / niche / SKU constraints. Product is secondary. The viral mechanic is primary.
+- Do NOT over-polish into ad copy or marketing-speak. No "transform your", "discover", "unlock", "the secret to".
+- Do NOT write a full script. ONLY the first 1-2 seconds.
+- Do NOT swap polarity. If the source mechanic is conflict, every scene keeps the edge.
+
+# What you MUST do
+
+- Replace vague words with concrete, visible details.
+- Make `first_2_seconds` describe a visible action that a phone could film in one take.
+- Add the exact on-screen text the viewer would see (transcribe what the burned-in caption / sticky note / DM screenshot says).
+- Make the social tension specific: who is on screen, what stakes, what the friction is.
+- Identify the comment impulse — the literal urge the viewer feels to type something.
+- Identify why a viewer would keep watching past the 2-second mark.
+- Preserve broad virality — the scene should be reusable across many products. Do NOT pin to one product category.
+- Remove all generic product-swap feel.
+
+# Banned vague placeholders
+
+If your output contains any of these as the entire scene (standalone, not attached to a specific visible detail), the concept fails the specificity bar:
+
+  - "a person ..."
+  - "an item ..."
+  - "a product ..."
+  - "a creator ..." (unless naming someone visible)
+  - "a unique item ..."
+  - "a handmade item ..."
+  - "reveals effort"
+  - "publicly doubts"
+  - "shows hidden value"
+  - "dismisses the work"
+  - "mocks the creation"
+
+These are category labels, not visible scenes. Replace them.
+
+# BAD vs GOOD calibration examples
+
+Each pair shows a Pass 2 concept that's too abstract and the specific rewrite that meets the bar.
+
+Bad:  "A person dismisses a handmade item."
+Good: "A guy picks up the lamp, sees the $80 sign, laughs, and sets it down like it is trash."
+
+Bad:  "A creator reveals effort."
+Good: "The seller quietly peels a sticky note off the product that says '$80?? 😂' while the stall is empty behind him."
+
+Bad:  "A person publicly doubts the work."
+Good: "A dad records his daughter checking the comments on her handmade item, then she whispers, 'Did anyone like it yet?'"
+
+Bad:  "A customer mocks a product."
+Good: "A woman laughs at a memory gift and says, 'People pay for this?' then the text reveals it was made from the last photo before chemo."
+
+Bad:  "A unique item is rejected."
+Good: "A maker starts packing up the stall after 6 hours with no buyers, then one person walks back and points at the weirdest item."
+
+What "good" has that "bad" doesn't:
+  - filmable in one take on a phone,
+  - visible action plus on-screen text,
+  - a real felt social moment, not a category label,
+  - the conflict / mechanic visible in the first 2 seconds.
+
+# Coverage
+
+Rewrite as many of Pass 2's variations and pioneer_concepts as your input contains. Prioritize:
+
+  1. ALL pioneer_concepts (the user's primary goal).
+  2. Then variations, starting from those with the highest implied virality signal.
+
+For each rewrite, you MUST preserve:
+  - source_type ("variation" or "pioneer_concept")
+  - source_concept_name (the concept_name from Pass 2 — verbatim)
+  - story_flow_id (from Pass 2's matched flow)
+
+# Per-scene fields (all required)
+
+  - source_type
+  - source_concept_name
+  - story_flow_id
+  - specific_concept_name      (2-5 words; DO NOT reuse the source name verbatim if the source name is too abstract)
+  - first_2_seconds            (a visible action filmable in one take)
+  - onscreen_text              (the EXACT text that would appear on screen; use "" only if there genuinely should be none)
+  - visual_beat                (the single visible moment that lands the hook)
+  - social_tension             (the felt friction — specific people, specific stakes)
+  - viewer_comment_impulse     (the specific urge to type something)
+  - why_they_keep_watching     (the specific reason a viewer doesn't scroll past 2s)
+  - freshness_angle            (what makes this NOT a recycled cooked hook)
+  - believability_risk         (what would make it feel fake or staged)
+  - cringe_risk                (what would make it feel AI-slop or cooked)
+  - virality_potential_score   (0-1)
+
+# Uncastable concepts
+
+If a Pass 2 concept genuinely cannot be made specific — the underlying mechanic itself is too abstract or contradictory — STILL emit a scene_concept for it with:
+  - `first_2_seconds` beginning with the prefix "UNCASTABLE: " followed by a one-line reason,
+  - `virality_potential_score` set to at most 0.30.
+
+This is more useful than silently dropping it. The user wants to see which Pass 2 ideas couldn't survive the specificity bar.
+
+# Output schema (return EXACTLY)
+
+{
+  "specificity_notes": string,
+  "weak_patterns_fixed": [string, ...],
+  "scene_concepts": [
+    {
+      "source_type": "variation" | "pioneer_concept",
+      "source_concept_name": string,
+      "story_flow_id": string,
+      "specific_concept_name": string,
+      "first_2_seconds": string,
+      "onscreen_text": string,
+      "visual_beat": string,
+      "social_tension": string,
+      "viewer_comment_impulse": string,
+      "why_they_keep_watching": string,
+      "freshness_angle": string,
+      "believability_risk": string,
+      "cringe_risk": string,
+      "virality_potential_score": number
+    }
+  ]
+}
+
+Return STRICT JSON only. No prose outside the JSON object. No markdown fences. No commentary.
+"""
+
+
+def build_specificity_user_prompt(
+    pass1_result: dict[str, Any],
+    pass2_result: dict[str, Any],
+    taste_profile: str | None = None,
+) -> str:
+    """Pass 3's user message embeds Pass 1 (for context) and the relevant
+    slices of Pass 2 (the variations and pioneer concepts to rewrite),
+    plus an optional taste profile from stored feedback."""
+    pass1_json = json.dumps(pass1_result or {}, indent=2, ensure_ascii=False)
+    # Pull only the parts of Pass 2 the specificity pass needs to act on
+    # — keeps the prompt focused and the token budget honest.
+    pass2_slice = {
+        k: pass2_result.get(k)
+        for k in (
+            "viral_mechanic",
+            "viewer_role",
+            "matched_story_flows",
+            "dominant_story_flow",
+            "variations",
+            "pioneer_concepts",
+        )
+        if k in pass2_result
+    }
+    pass2_json = json.dumps(pass2_slice, indent=2, ensure_ascii=False)
+
+    parts: list[str] = []
+    parts.append("PASS 1 EVIDENCE (visual ground truth — do NOT contradict):")
+    parts.append("```json")
+    parts.append(pass1_json)
+    parts.append("```")
+    parts.append("")
+    parts.append("PASS 2 STRATEGY (the variations and pioneer concepts to rewrite):")
+    parts.append("```json")
+    parts.append(pass2_json)
+    parts.append("```")
+
+    if taste_profile and taste_profile.strip():
+        parts.append("")
+        parts.append("USER TASTE PROFILE (soft guide from prior ratings — bias toward 'liked' patterns, avoid 'disliked' patterns):")
+        parts.append(taste_profile.strip())
+
+    parts.append("")
+    parts.append(
+        "Rewrite each variation and pioneer concept into a specific, filmable "
+        "first-2-second scene per the system instructions. Preserve "
+        "source_type, source_concept_name, and story_flow_id verbatim. Mark "
+        "anything that cannot be made specific with the UNCASTABLE prefix. "
+        "Output STRICT JSON only."
+    )
+    return "\n".join(parts)
+
+
+def run_specificity_pass(
+    pass1_result: dict[str, Any],
+    pass2_result: dict[str, Any],
+    provider: VisionProvider,
+    taste_profile: str | None = None,
+    repair_provider: VisionProvider | None = None,
+) -> dict[str, Any]:
+    """Pass 3. Text-only. Consumes Pass 1 + Pass 2 and returns
+    {specificity_notes, weak_patterns_fixed, scene_concepts}."""
+    user_prompt = build_specificity_user_prompt(pass1_result, pass2_result, taste_profile)
+    raw = provider.analyze_text(SPECIFICITY_SYSTEM_PROMPT, user_prompt)
+    return _parse_or_repair(raw, repair_provider or provider)
+
+
+def analyze_three_pass(
+    contact_sheet_path: Path,
+    metadata: dict[str, Any],
+    vision_provider: VisionProvider,
+    strategy_provider: VisionProvider | None = None,
+    taste_profile: str | None = None,
+) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    """Pass 1 -> Pass 2 -> Pass 3. Returns all three parsed JSON dicts.
+
+    `strategy_provider` is reused for Pass 2 AND Pass 3 (text-only calls).
+    It also acts as the repair provider for Pass 1's parse failures.
+
+    `taste_profile` is an optional summary built from stored feedback
+    (db.build_taste_summary). When provided, it conditions Pass 3 only."""
+    sp = strategy_provider or vision_provider
+    pass1 = extract_visual_event(
+        contact_sheet_path, metadata, vision_provider, repair_provider=sp,
+    )
+    pass2 = generate_hook_strategy(metadata, pass1, sp, repair_provider=sp)
+    pass3 = run_specificity_pass(
+        pass1, pass2, sp, taste_profile=taste_profile, repair_provider=sp,
+    )
+    return pass1, pass2, pass3
+
+
+def build_three_pass_analysis_result(
+    pass1: dict[str, Any],
+    pass2: dict[str, Any],
+    pass3: dict[str, Any],
+) -> AnalysisResult:
+    """Same field mapping as build_two_pass_analysis_result, but
+    raw_analysis now carries all three passes verbatim:
+
+      {
+        "analysis_mode": "three_pass",
+        "visual_event_pass": <pass1>,
+        "hook_strategy_pass": <pass2>,
+        "specificity_pass": <pass3>
+      }
+
+    hook_mutations stays sourced from Pass 2's creative_hook_concepts
+    (or legacy hook_mutations) for show-report back-compat. The new
+    scene_concepts are surfaced via raw_analysis.specificity_pass and
+    rendered as the SPECIFIC HOOK SCENES section of analyze-link."""
+    result = build_two_pass_analysis_result(pass1, pass2)
+    result.raw_analysis = {
+        "analysis_mode": "three_pass",
+        "visual_event_pass": pass1 or {},
+        "hook_strategy_pass": pass2 or {},
+        "specificity_pass": pass3 or {},
+    }
+    return result
+
+
 def build_two_pass_analysis_result(
     pass1: dict[str, Any],
     pass2: dict[str, Any],

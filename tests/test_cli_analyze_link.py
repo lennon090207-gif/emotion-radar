@@ -341,25 +341,77 @@ PASS2_OLIVER_GOOD = {
 }
 
 
-def _patch_providers(monkeypatch, pass1_text: str, pass2_text: str):
+DEFAULT_PASS3 = {
+    "specificity_notes": "rewritten via mock provider",
+    "weak_patterns_fixed": [],
+    "scene_concepts": [
+        {"source_type": "pioneer_concept",
+         "source_concept_name": "Receipt Wall",
+         "story_flow_id": "comment_humiliation_public_witness",
+         "specific_concept_name": "Receipt Wall, Pinned",
+         "first_2_seconds": "creator silently pins three printed rude DMs to a corkboard",
+         "onscreen_text": "I keep them all now.",
+         "visual_beat": "the third pin going in",
+         "social_tension": "no spoken word; the wall does the talking",
+         "viewer_comment_impulse": "urge to add 'I'd pay extra now'",
+         "why_they_keep_watching": "slow-reveal payoff of the wall",
+         "freshness_angle": "tactile evidence collage is underused",
+         "believability_risk": "real names must be redacted",
+         "cringe_risk": "feels staged if pinned too neatly",
+         "virality_potential_score": 0.86},
+        {"source_type": "variation",
+         "source_concept_name": "Receipt of Cruelty",
+         "story_flow_id": "public_disrespect_viewer_defense",
+         "specific_concept_name": "Receipt at the Stall",
+         "first_2_seconds": "the seller silently sets a printed rude-DM screenshot next to the lamp",
+         "onscreen_text": "she said it was 'overpriced trash'",
+         "visual_beat": "tape pulled off the screenshot, set down",
+         "social_tension": "the stall is busy; people pause to read",
+         "viewer_comment_impulse": "urge to defend the maker",
+         "why_they_keep_watching": "viewers want to see if anyone reacts",
+         "freshness_angle": "physical-receipt format instead of voice-over",
+         "believability_risk": "fails if the DM reads written-by-the-creator",
+         "cringe_risk": "fabricated screenshot kills it",
+         "virality_potential_score": 0.78},
+    ],
+}
+
+
+def _patch_providers(monkeypatch, pass1_text: str, pass2_text: str, pass3_text: str | None = None):
+    """Patch build_provider_for_role with mocks that serve a queued
+    sequence of text responses (Pass 2, then Pass 3, then repeat last).
+    Pass 3 defaults to DEFAULT_PASS3 so existing tests that don't care
+    about Pass 3 content still work under the new three-pass default."""
+    if pass3_text is None:
+        pass3_text = json.dumps(DEFAULT_PASS3)
+
     class _MP:
         name = "mock"
 
-        def __init__(self, model_label, image_resp, text_resp):
+        def __init__(self, model_label, image_resp, text_responses):
             self.model = model_label
             self._image = image_resp
-            self._text = text_resp
+            self._text_responses = list(text_responses)
+            self._text_index = 0
+            self.image_calls: list = []
+            self.text_calls: list = []
 
         def analyze_image(self, image_path, system, user):
+            self.image_calls.append({"image_path": image_path, "system": system, "user": user})
             return self._image
 
         def analyze_text(self, system, user):
-            return self._text
+            self.text_calls.append({"system": system, "user": user})
+            if self._text_index < len(self._text_responses):
+                r = self._text_responses[self._text_index]
+                self._text_index += 1
+                return r
+            return self._text_responses[-1] if self._text_responses else "{}"
 
     def _fake_build(env, role):
         if role == "vision_event":
-            return _MP("mock-vision-1", pass1_text, "")
-        return _MP("mock-strategy-1", "", pass2_text)
+            return _MP("mock-vision-1", pass1_text, [""])
+        return _MP("mock-strategy-1", "", [pass2_text, pass3_text])
 
     monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
 
@@ -409,7 +461,7 @@ def test_no_vision_skips_provider_and_evaluation(mock_infrastructure, monkeypatc
 
 # ---- analyze-link: --dry-run-vision ----------------------------------------
 
-def test_dry_run_vision_prints_both_prompts_and_skips_api(mock_infrastructure, monkeypatch, tmp_path: Path):
+def test_dry_run_vision_prints_all_three_prompts_and_skips_api(mock_infrastructure, monkeypatch, tmp_path: Path):
     def _explode(env, role):
         raise AssertionError("provider must not be built in --dry-run-vision mode")
     monkeypatch.setattr(cli_mod, "build_provider_for_role", _explode)
@@ -419,11 +471,29 @@ def test_dry_run_vision_prints_both_prompts_and_skips_api(mock_infrastructure, m
     assert result.exit_code == 0, result.output
     assert "=== PASS 1 SYSTEM" in result.output
     assert "=== PASS 2 SYSTEM" in result.output
+    assert "=== PASS 3 SYSTEM" in result.output  # Phase 6: three-pass default
     assert "=== PASS 1 USER" in result.output
     assert "=== PASS 2 USER" in result.output
+    assert "=== PASS 3 USER" in result.output
     assert "dry-run: no API call made" in result.output
     # Final report stub also prints.
     assert "Emotion Radar Report" in result.output
+
+
+def test_dry_run_vision_with_no_specificity_prints_only_two_prompts(mock_infrastructure, monkeypatch, tmp_path: Path):
+    def _explode(env, role):
+        raise AssertionError("provider must not be built in --dry-run-vision mode")
+    monkeypatch.setattr(cli_mod, "build_provider_for_role", _explode)
+
+    result = _invoke(
+        tmp_path, "analyze-link", OLIVER_URL,
+        "--dry-run-vision", "--no-specificity",
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "=== PASS 1 SYSTEM" in result.output
+    assert "=== PASS 2 SYSTEM" in result.output
+    assert "=== PASS 3 SYSTEM" not in result.output
 
 
 # ---- analyze-link: full two-pass + auto-evaluation (Oliver fixture) -------
@@ -456,8 +526,12 @@ def test_full_two_pass_auto_evaluates_oliver_and_passes(mock_infrastructure, mon
     assert row["onscreen_text"] == "Please be honest, how are they?"
     assert row["overall_opportunity_score"] == 0.78
     assert isinstance(row["raw_analysis"], dict)
-    assert row["raw_analysis"]["analysis_mode"] == "two_pass"
+    # Phase 6: analyze-link defaults to three-pass.
+    assert row["raw_analysis"]["analysis_mode"] == "three_pass"
     assert row["raw_analysis"]["visual_event_pass"]["conflict_type"] == "smash"
+    # Phase 6: specificity_pass rides in raw_analysis.
+    assert "specificity_pass" in row["raw_analysis"]
+    assert isinstance(row["raw_analysis"]["specificity_pass"].get("scene_concepts"), list)
     # Phase 4: new viral-focused fields ride in raw_analysis.
     hsp = row["raw_analysis"]["hook_strategy_pass"]
     assert hsp["viral_mechanic"].startswith("public disrespect")

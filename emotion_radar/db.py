@@ -51,7 +51,26 @@ CREATE TABLE IF NOT EXISTS reports (
 );
 CREATE INDEX IF NOT EXISTS idx_reports_created_at ON reports(created_at);
 CREATE INDEX IF NOT EXISTS idx_reports_video_id   ON reports(video_id);
+
+-- Phase 6: per-scene-concept user feedback. Powers the taste-feedback
+-- loop that conditions Pass 3 in future runs.
+CREATE TABLE IF NOT EXISTS concept_feedback (
+    id                   INTEGER PRIMARY KEY AUTOINCREMENT,
+    report_id            TEXT NOT NULL,
+    concept_source_type  TEXT NOT NULL,
+    concept_name         TEXT NOT NULL,
+    concept_index        INTEGER NOT NULL,
+    rating               TEXT NOT NULL,
+    note                 TEXT,
+    created_at           TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_concept_feedback_report_id ON concept_feedback(report_id);
+CREATE INDEX IF NOT EXISTS idx_concept_feedback_rating    ON concept_feedback(rating);
+CREATE INDEX IF NOT EXISTS idx_concept_feedback_created   ON concept_feedback(created_at);
 """
+
+# Phase 6: allowed ratings for concept_feedback.rating.
+ALLOWED_RATINGS: tuple[str, ...] = ("fire", "good", "meh", "cringe", "cooked")
 
 
 def _now_iso() -> str:
@@ -247,3 +266,147 @@ def get_report(db_path: Path | str, report_id: str) -> dict[str, Any] | None:
         cur = conn.execute("SELECT * FROM reports WHERE id = ?", (report_id,))
         row = cur.fetchone()
         return _row_to_report(row) if row else None
+
+
+# ============================================================================
+# Phase 6: concept_feedback CRUD + taste summary
+# ============================================================================
+
+
+class FeedbackError(ValueError):
+    """Raised on invalid feedback input (bad rating, missing fields)."""
+
+
+def insert_feedback(
+    db_path: Path | str,
+    report_id: str,
+    concept_source_type: str,
+    concept_name: str,
+    concept_index: int,
+    rating: str,
+    note: str | None = None,
+) -> int:
+    """Insert a feedback row. Returns the new id.
+    Raises FeedbackError if `rating` is not in ALLOWED_RATINGS."""
+    if rating not in ALLOWED_RATINGS:
+        raise FeedbackError(
+            f"Invalid rating {rating!r}. Allowed: {', '.join(ALLOWED_RATINGS)}"
+        )
+    if not report_id or not concept_source_type or not concept_name:
+        raise FeedbackError("report_id, concept_source_type, and concept_name are required.")
+    init_db(db_path)
+    row = {
+        "report_id": report_id,
+        "concept_source_type": concept_source_type,
+        "concept_name": concept_name,
+        "concept_index": int(concept_index),
+        "rating": rating,
+        "note": note,
+        "created_at": _now_iso(),
+    }
+    with connect(db_path) as conn:
+        cur = conn.execute(
+            """
+            INSERT INTO concept_feedback
+                (report_id, concept_source_type, concept_name, concept_index,
+                 rating, note, created_at)
+            VALUES (:report_id, :concept_source_type, :concept_name, :concept_index,
+                    :rating, :note, :created_at)
+            """,
+            row,
+        )
+        return int(cur.lastrowid)
+
+
+def _row_to_feedback(row: sqlite3.Row) -> dict[str, Any]:
+    d = dict(row)
+    return {
+        "id": d["id"],
+        "report_id": d["report_id"],
+        "concept_source_type": d["concept_source_type"],
+        "concept_name": d["concept_name"],
+        "concept_index": d["concept_index"],
+        "rating": d["rating"],
+        "note": d["note"],
+        "created_at": d["created_at"],
+    }
+
+
+def list_feedback(db_path: Path | str, limit: int = 50) -> list[dict[str, Any]]:
+    """Return the most recent feedback rows, newest first."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cur = conn.execute(
+            "SELECT * FROM concept_feedback ORDER BY created_at DESC, id DESC LIMIT ?",
+            (int(limit),),
+        )
+        return [_row_to_feedback(r) for r in cur.fetchall()]
+
+
+def get_report_feedback(
+    db_path: Path | str,
+    report_id: str,
+) -> list[dict[str, Any]]:
+    """All feedback rows for one report, newest first."""
+    init_db(db_path)
+    with connect(db_path) as conn:
+        cur = conn.execute(
+            """
+            SELECT * FROM concept_feedback
+            WHERE report_id = ?
+            ORDER BY created_at DESC, id DESC
+            """,
+            (report_id,),
+        )
+        return [_row_to_feedback(r) for r in cur.fetchall()]
+
+
+_POSITIVE_RATINGS = ("fire", "good")
+_NEGATIVE_RATINGS = ("cringe", "cooked")
+
+
+def build_taste_summary(
+    db_path: Path | str,
+    limit: int = 50,
+) -> str | None:
+    """Build a compact, human-readable taste summary from recent feedback,
+    or return None if no feedback exists. The summary is designed to be
+    embedded in the Pass 3 system / user prompt as a soft guide."""
+    rows = list_feedback(db_path, limit=limit)
+    if not rows:
+        return None
+
+    liked: list[str] = []
+    disliked: list[str] = []
+    meh: list[str] = []
+    notes: list[str] = []
+    for r in rows:
+        label = f"{r['concept_name']} ({r['concept_source_type']})"
+        if r["rating"] in _POSITIVE_RATINGS:
+            liked.append(label)
+        elif r["rating"] in _NEGATIVE_RATINGS:
+            disliked.append(label)
+        else:
+            meh.append(label)
+        if r.get("note"):
+            notes.append(r["note"])
+
+    lines: list[str] = []
+    if liked:
+        lines.append("User tends to like:")
+        for item in liked[:10]:
+            lines.append(f"  - {item}")
+    if disliked:
+        if lines:
+            lines.append("")
+        lines.append("User dislikes:")
+        for item in disliked[:10]:
+            lines.append(f"  - {item}")
+    if notes:
+        if lines:
+            lines.append("")
+        lines.append("Recent notes:")
+        for item in notes[:10]:
+            lines.append(f"  - {item}")
+
+    return "\n".join(lines) if lines else None

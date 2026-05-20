@@ -41,7 +41,18 @@ from .config import (
     load_env,
     resolve_paths,
 )
-from .db import get_report, insert_report, list_reports, update_report_analysis
+from .db import (
+    ALLOWED_RATINGS,
+    FeedbackError,
+    build_taste_summary,
+    get_report,
+    get_report_feedback,
+    insert_feedback,
+    insert_report,
+    list_feedback,
+    list_reports,
+    update_report_analysis,
+)
 from .evaluator import (
     EvaluationResult,
     evaluate_report as evaluate_report_fn,
@@ -325,13 +336,19 @@ def _resolve_contact_sheet(report: dict[str, Any]) -> Path:
     return sheet_path
 
 
-def _print_two_pass_dry_run(report: dict[str, Any], sheet_path: Path) -> None:
-    """Print both Pass 1 and Pass 2 prompts. Pass 2's user prompt is
-    built with a placeholder evidence layer since the real Pass 1
-    output doesn't exist yet."""
+def _print_dry_run_prompts(
+    report: dict[str, Any],
+    sheet_path: Path,
+    db_path: Path | None,
+    three_pass: bool = True,
+) -> None:
+    """Print the prompts that would be sent. With three_pass=True
+    (default), prints Pass 1, Pass 2, AND Pass 3 prompt templates.
+    With three_pass=False, prints only Pass 1 and Pass 2."""
     pass1_user = analysis_mod.build_visual_event_user_prompt(report)
-    placeholder = {"_placeholder": "Pass 1 evidence-layer JSON would be embedded here"}
-    pass2_user = analysis_mod.build_hook_strategy_user_prompt(report, placeholder)
+    pass1_placeholder = {"_placeholder": "Pass 1 evidence-layer JSON would be embedded here at runtime"}
+    pass2_user = analysis_mod.build_hook_strategy_user_prompt(report, pass1_placeholder)
+
     click.echo("=== PASS 1 SYSTEM (Visual Event Extractor) ===")
     click.echo(analysis_mod.VISUAL_EVENT_SYSTEM_PROMPT)
     click.echo("\n=== PASS 1 USER ===")
@@ -340,8 +357,30 @@ def _print_two_pass_dry_run(report: dict[str, Any], sheet_path: Path) -> None:
     click.echo(analysis_mod.HOOK_STRATEGY_SYSTEM_PROMPT)
     click.echo("\n=== PASS 2 USER (template; Pass 1 JSON is embedded at runtime) ===")
     click.echo(pass2_user)
+
+    if three_pass:
+        pass2_placeholder = {
+            "_placeholder": "Pass 2 variations + pioneer_concepts JSON would be embedded here at runtime"
+        }
+        taste = build_taste_summary(db_path) if db_path is not None else None
+        pass3_user = analysis_mod.build_specificity_user_prompt(
+            pass1_placeholder, pass2_placeholder, taste_profile=taste,
+        )
+        click.echo("\n=== PASS 3 SYSTEM (Specificity / Hook Scene Writer) ===")
+        click.echo(analysis_mod.SPECIFICITY_SYSTEM_PROMPT)
+        click.echo("\n=== PASS 3 USER (template; Pass 1 + Pass 2 JSON embedded at runtime) ===")
+        click.echo(pass3_user)
+        if taste:
+            click.echo("\n(Pass 3 would be conditioned on the stored taste profile shown above.)")
+        else:
+            click.echo("\n(No stored taste feedback yet — Pass 3 would run without conditioning.)")
+
     click.echo(f"\n=== IMAGE (Pass 1 input) ===\n{sheet_path}")
     click.echo("\n(dry-run: no API call made)")
+
+
+# Back-compat alias for any internal callers expecting the old name.
+_print_two_pass_dry_run = _print_dry_run_prompts
 
 
 def _build_pass_providers(env: dict[str, str]) -> tuple[VisionProvider, VisionProvider]:
@@ -353,14 +392,31 @@ def _build_pass_providers(env: dict[str, str]) -> tuple[VisionProvider, VisionPr
     return vision, strategy
 
 
+def _fields_from_result(result) -> dict[str, Any]:
+    return {
+        "visual_hook_summary": result.visual_hook_summary,
+        "onscreen_text": result.onscreen_text,
+        "emotional_mechanic": result.emotional_mechanic,
+        "viewer_role": result.viewer_role,
+        "emotions_triggered": result.emotions_triggered,
+        "product_attachability_score": result.product_attachability_score,
+        "transferability_score": result.transferability_score,
+        "freshness_score": result.freshness_score,
+        "cooked_score": result.cooked_score,
+        "overall_opportunity_score": result.overall_opportunity_score,
+        "hook_mutations": result.hook_mutations,
+        "raw_analysis": result.raw_analysis,
+    }
+
+
 def _run_two_pass_and_update(
     report: dict[str, Any],
     sheet_path: Path,
     db_path: Path,
 ) -> dict[str, Any]:
-    """Real two-pass run. Builds providers from env, runs Pass 1 and
-    Pass 2, merges into AnalysisResult, writes back to the row,
-    returns the merged-fields dict for printing."""
+    """Two-pass run (Pass 1 + Pass 2 only). Used when the user passes
+    --no-specificity for debugging. The default analyze-link /
+    analyze-report flow now uses three-pass."""
     env = load_env()
     try:
         vision_provider, strategy_provider = _build_pass_providers(env)
@@ -380,21 +436,51 @@ def _run_two_pass_and_update(
     except ValueError as e:
         raise click.ClickException(f"Could not parse model output: {e}") from e
 
-    result = analysis_mod.build_two_pass_analysis_result(pass1, pass2)
-    fields = {
-        "visual_hook_summary": result.visual_hook_summary,
-        "onscreen_text": result.onscreen_text,
-        "emotional_mechanic": result.emotional_mechanic,
-        "viewer_role": result.viewer_role,
-        "emotions_triggered": result.emotions_triggered,
-        "product_attachability_score": result.product_attachability_score,
-        "transferability_score": result.transferability_score,
-        "freshness_score": result.freshness_score,
-        "cooked_score": result.cooked_score,
-        "overall_opportunity_score": result.overall_opportunity_score,
-        "hook_mutations": result.hook_mutations,
-        "raw_analysis": result.raw_analysis,
-    }
+    fields = _fields_from_result(analysis_mod.build_two_pass_analysis_result(pass1, pass2))
+    if not update_report_analysis(db_path, report["id"], fields):
+        raise click.ClickException(
+            f"DB update failed for report {report['id']} (row not found?)."
+        )
+    return fields
+
+
+def _run_three_pass_and_update(
+    report: dict[str, Any],
+    sheet_path: Path,
+    db_path: Path,
+) -> dict[str, Any]:
+    """Default flow: Pass 1 + Pass 2 + Pass 3 (specificity rewrite).
+    Pass 3 is conditioned on the user's stored taste profile if any
+    feedback rows exist; otherwise the profile is omitted."""
+    env = load_env()
+    try:
+        vision_provider, strategy_provider = _build_pass_providers(env)
+    except VisionProviderError as e:
+        raise click.ClickException(str(e)) from e
+
+    taste = build_taste_summary(db_path)
+    click.echo(
+        f"Pass 1 (visual event)  : {vision_provider.model}\n"
+        f"Pass 2 (hook strategy) : {strategy_provider.model}\n"
+        f"Pass 3 (specificity)   : {strategy_provider.model}"
+    )
+    if taste:
+        click.echo("(Pass 3 will be conditioned on stored taste feedback.)")
+    click.echo("(Vision API may incur cost.)")
+
+    try:
+        pass1, pass2, pass3 = analysis_mod.analyze_three_pass(
+            sheet_path, report, vision_provider, strategy_provider,
+            taste_profile=taste,
+        )
+    except VisionProviderError as e:
+        raise click.ClickException(f"Vision provider failed: {e}") from e
+    except ValueError as e:
+        raise click.ClickException(f"Could not parse model output: {e}") from e
+
+    fields = _fields_from_result(
+        analysis_mod.build_three_pass_analysis_result(pass1, pass2, pass3)
+    )
     if not update_report_analysis(db_path, report["id"], fields):
         raise click.ClickException(
             f"DB update failed for report {report['id']} (row not found?)."
@@ -405,11 +491,16 @@ def _run_two_pass_and_update(
 @cli.command("analyze-report")
 @click.argument("report_id")
 @click.option("--dry-run", is_flag=True, default=False,
-              help="Print both Pass 1 and Pass 2 prompts, then exit. No API call.")
+              help="Print Pass 1 / 2 / 3 prompts, then exit. No API call.")
+@click.option("--no-specificity", is_flag=True, default=False,
+              help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
 @click.pass_context
-def analyze_report_cmd(ctx: click.Context, report_id: str, dry_run: bool) -> None:
-    """Re-run two-pass vision analysis on an existing report's contact
-    sheet and write the structured hook intelligence back into the row."""
+def analyze_report_cmd(
+    ctx: click.Context, report_id: str, dry_run: bool, no_specificity: bool,
+) -> None:
+    """Re-run vision analysis on an existing report's contact sheet and
+    write the structured hook intelligence back into the row. Defaults
+    to three-pass (visual event -> hook strategy -> specificity)."""
     paths = ctx.obj["paths"]
     report = get_report(paths.db_path, report_id)
     if not report:
@@ -417,11 +508,17 @@ def analyze_report_cmd(ctx: click.Context, report_id: str, dry_run: bool) -> Non
     sheet_path = _resolve_contact_sheet(report)
 
     if dry_run:
-        _print_two_pass_dry_run(report, sheet_path)
+        _print_dry_run_prompts(
+            report, sheet_path, paths.db_path, three_pass=not no_specificity,
+        )
         return
 
-    fields = _run_two_pass_and_update(report, sheet_path, paths.db_path)
-    click.echo("\n=== Two-pass analysis ===")
+    if no_specificity:
+        fields = _run_two_pass_and_update(report, sheet_path, paths.db_path)
+        click.echo("\n=== Two-pass analysis ===")
+    else:
+        fields = _run_three_pass_and_update(report, sheet_path, paths.db_path)
+        click.echo("\n=== Three-pass analysis ===")
     click.echo(json.dumps(fields, indent=2, ensure_ascii=False, sort_keys=True))
     click.echo(f"\nUpdated report {report_id}.")
 
@@ -643,6 +740,55 @@ def _print_final_report(report: dict[str, Any]) -> None:
         if p.get("ethical_or_cringe_risk"):
             click.echo(f"      ethical / cringe risk:     {p['ethical_or_cringe_risk']}")
 
+    # ----- Phase 6: Specific Hook Scenes (main actionable output) -----
+    spec = {}
+    if isinstance(raw, dict):
+        v = raw.get("specificity_pass")
+        if isinstance(v, dict):
+            spec = v
+    scenes = spec.get("scene_concepts") if isinstance(spec.get("scene_concepts"), list) else []
+    click.echo("\n" + ("#" * 60))
+    click.echo(f"### SPECIFIC HOOK SCENES  ({len(scenes)}) -- main actionable output")
+    click.echo("#" * 60)
+    weak_fixed = spec.get("weak_patterns_fixed") if isinstance(spec.get("weak_patterns_fixed"), list) else []
+    if weak_fixed:
+        click.echo("  Weak patterns the rewriter fixed:")
+        for item in weak_fixed:
+            click.echo(f"    - {item}")
+    if spec.get("specificity_notes"):
+        click.echo(f"  Notes: {spec['specificity_notes']}")
+    if not scenes:
+        click.echo("\n  (no scene concepts — run without --no-specificity for the Phase-6 rewrite)")
+    for i, s in enumerate(scenes, start=1):
+        if not isinstance(s, dict):
+            continue
+        click.echo(
+            f"\n  [{i}] {s.get('specific_concept_name') or '(no name)'}"
+            f"   (based on {s.get('source_type') or '?'}: "
+            f"{s.get('source_concept_name') or '?'} | flow: {s.get('story_flow_id') or '?'})"
+        )
+        if s.get("first_2_seconds"):
+            click.echo(f"      first 2 seconds:        {s['first_2_seconds']}")
+        if s.get("onscreen_text"):
+            click.echo(f"      onscreen text:          {s['onscreen_text']}")
+        if s.get("visual_beat"):
+            click.echo(f"      visual beat:            {s['visual_beat']}")
+        if s.get("social_tension"):
+            click.echo(f"      social tension:         {s['social_tension']}")
+        if s.get("viewer_comment_impulse"):
+            click.echo(f"      comment impulse:        {s['viewer_comment_impulse']}")
+        if s.get("why_they_keep_watching"):
+            click.echo(f"      why they keep watching: {s['why_they_keep_watching']}")
+        if s.get("freshness_angle"):
+            click.echo(f"      freshness angle:        {s['freshness_angle']}")
+        if s.get("believability_risk"):
+            click.echo(f"      believability risk:     {s['believability_risk']}")
+        if s.get("cringe_risk"):
+            click.echo(f"      cringe risk:            {s['cringe_risk']}")
+        score = s.get("virality_potential_score")
+        if score is not None:
+            click.echo(f"      virality potential:     {_fmt_score(score)}")
+
 
 def _print_evaluation(
     result: EvaluationResult,
@@ -694,9 +840,11 @@ def _print_evaluation(
 @click.option("--keep-temp", is_flag=True, default=False,
               help="Keep raw MP4 and frame JPEGs after the contact sheet is built.")
 @click.option("--dry-run-vision", is_flag=True, default=False,
-              help="Run Apify/video/contact sheet, then print both vision prompts; no API call.")
+              help="Run Apify/video/contact sheet, then print all vision prompts; no API call.")
 @click.option("--no-vision", is_flag=True, default=False,
               help="Skip the vision passes entirely; produce only the infrastructure report stub.")
+@click.option("--no-specificity", is_flag=True, default=False,
+              help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
 @click.option("--skip-evaluation", is_flag=True, default=False,
               help="Skip the calibration check, even for known video ids.")
 @click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
@@ -708,6 +856,7 @@ def analyze_link_cmd(
     keep_temp: bool,
     dry_run_vision: bool,
     no_vision: bool,
+    no_specificity: bool,
     skip_evaluation: bool,
     expected_path: str | None,
 ) -> None:
@@ -746,12 +895,17 @@ def analyze_link_cmd(
     sheet_path = _resolve_contact_sheet(report)
 
     if dry_run_vision:
-        _print_two_pass_dry_run(report, sheet_path)
+        _print_dry_run_prompts(
+            report, sheet_path, paths.db_path, three_pass=not no_specificity,
+        )
         _print_final_report(report)
         return
 
-    # --- 4. Two-pass vision + DB update. ---
-    _run_two_pass_and_update(report, sheet_path, paths.db_path)
+    # --- 4. Vision + DB update (three-pass by default). ---
+    if no_specificity:
+        _run_two_pass_and_update(report, sheet_path, paths.db_path)
+    else:
+        _run_three_pass_and_update(report, sheet_path, paths.db_path)
     final_report = get_report(paths.db_path, report_id)
     if not final_report:
         raise click.ClickException("Report disappeared mid-pipeline.")
@@ -857,6 +1011,151 @@ def evaluate_report_cmd(ctx: click.Context, report_id: str, expected_path: str) 
     if not result.passed:
         # Make CI / shell-pipeline failures obvious.
         ctx.exit(1)
+
+
+def _get_scene_concepts(report: dict[str, Any]) -> list[dict[str, Any]]:
+    raw = report.get("raw_analysis") or {}
+    if not isinstance(raw, dict):
+        return []
+    spec = raw.get("specificity_pass") or {}
+    if not isinstance(spec, dict):
+        return []
+    scenes = spec.get("scene_concepts")
+    return scenes if isinstance(scenes, list) else []
+
+
+@cli.command("list-scenes")
+@click.argument("report_id")
+@click.pass_context
+def list_scenes_cmd(ctx: click.Context, report_id: str) -> None:
+    """List Phase-6 scene concepts (with indexes) for a report, suitable
+    for `rate-scene REPORT_ID INDEX`."""
+    paths = ctx.obj["paths"]
+    report = get_report(paths.db_path, report_id)
+    if not report:
+        raise click.ClickException(f"No report with id={report_id}")
+    scenes = _get_scene_concepts(report)
+    if not scenes:
+        click.echo(
+            "(no scene_concepts in this report — re-run analyze-link or "
+            "analyze-report without --no-specificity to populate them)"
+        )
+        return
+    for i, s in enumerate(scenes, start=1):
+        if not isinstance(s, dict):
+            continue
+        name = s.get("specific_concept_name") or s.get("source_concept_name") or "(no name)"
+        click.echo(f"[{i}] {name}")
+        if s.get("first_2_seconds"):
+            click.echo(f"    first 2 seconds: {s['first_2_seconds']}")
+        if s.get("onscreen_text"):
+            click.echo(f"    onscreen text:   {s['onscreen_text']}")
+        score = s.get("virality_potential_score")
+        if score is not None:
+            click.echo(f"    virality score:  {_fmt_score(score)}")
+
+
+@cli.command("rate-scene")
+@click.argument("report_id")
+@click.argument("index", type=int)
+@click.option("--rating", required=True,
+              type=click.Choice(list(ALLOWED_RATINGS), case_sensitive=False),
+              help="One of: " + ", ".join(ALLOWED_RATINGS))
+@click.option("--note", default=None, help="Optional free-text note.")
+@click.pass_context
+def rate_scene_cmd(
+    ctx: click.Context, report_id: str, index: int, rating: str, note: str | None,
+) -> None:
+    """Record a rating for a scene concept by 1-based index. Used to
+    build the taste profile that conditions future Pass 3 runs."""
+    paths = ctx.obj["paths"]
+    report = get_report(paths.db_path, report_id)
+    if not report:
+        raise click.ClickException(f"No report with id={report_id}")
+    scenes = _get_scene_concepts(report)
+    if not scenes:
+        raise click.ClickException(
+            "Report has no scene_concepts — re-run analyze-report "
+            "without --no-specificity first."
+        )
+    if index < 1 or index > len(scenes):
+        raise click.ClickException(
+            f"Scene index {index} out of range (1..{len(scenes)})."
+        )
+    scene = scenes[index - 1]
+    if not isinstance(scene, dict):
+        raise click.ClickException(f"Scene at index {index} is malformed.")
+
+    source_type = scene.get("source_type") or "scene_concept"
+    concept_name = (
+        scene.get("specific_concept_name")
+        or scene.get("source_concept_name")
+        or "(unnamed)"
+    )
+    try:
+        feedback_id = insert_feedback(
+            paths.db_path,
+            report_id=report_id,
+            concept_source_type=source_type,
+            concept_name=concept_name,
+            concept_index=index,
+            rating=rating.lower(),
+            note=note,
+        )
+    except FeedbackError as e:
+        raise click.ClickException(str(e)) from e
+
+    click.echo(
+        f"Recorded feedback #{feedback_id}: scene[{index}] '{concept_name}' = {rating.lower()}"
+        + (f"  -- {note}" if note else "")
+    )
+
+
+@cli.command("list-feedback")
+@click.option("--limit", default=20, show_default=True, type=int,
+              help="Newest N feedback rows.")
+@click.option("--report-id", "report_id", default=None,
+              help="Filter to one report.")
+@click.pass_context
+def list_feedback_cmd(
+    ctx: click.Context, limit: int, report_id: str | None,
+) -> None:
+    """List recent scene-concept feedback (newest first)."""
+    paths = ctx.obj["paths"]
+    rows = (
+        get_report_feedback(paths.db_path, report_id)
+        if report_id else list_feedback(paths.db_path, limit=limit)
+    )
+    if not rows:
+        click.echo("(no feedback yet)")
+        return
+    for r in rows[:limit]:
+        note_part = f"  -- {r['note']}" if r.get("note") else ""
+        click.echo(
+            f"#{r['id']:<4} [{r['rating']:<6}] "
+            f"{r['concept_name']}  "
+            f"(report={r['report_id']}, scene={r['concept_index']}, "
+            f"source={r['concept_source_type']}){note_part}"
+        )
+
+
+@cli.command("taste-summary")
+@click.option("--limit", default=50, show_default=True, type=int,
+              help="Build summary from the newest N feedback rows.")
+@click.pass_context
+def taste_summary_cmd(ctx: click.Context, limit: int) -> None:
+    """Print the compact taste profile that Pass 3 will use to condition
+    future scene rewrites."""
+    paths = ctx.obj["paths"]
+    summary = build_taste_summary(paths.db_path, limit=limit)
+    if not summary:
+        click.echo(
+            "(no feedback yet — rate scenes with `rate-scene REPORT_ID INDEX "
+            "--rating fire` to build a taste profile)"
+        )
+        return
+    click.echo("=== Stored taste profile (used to condition Pass 3) ===")
+    click.echo(summary)
 
 
 @cli.command("cleanup-temp")
