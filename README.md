@@ -106,13 +106,19 @@ is the calibration canary itself (see "Calibration check" below).
 ## Commands
 
 ```bash
-# ONE-SHOT: everything end-to-end (Apify -> contact sheet -> two-pass vision -> report -> auto-calibration)
+# ONE-SHOT (TikTok URL): everything end-to-end (Apify -> contact sheet -> three-pass vision -> report -> auto-calibration)
 python -m emotion_radar analyze-link https://www.tiktok.com/@user/video/123
 python -m emotion_radar analyze-link URL --dry-run-vision   # build contact sheet, print prompts, no API call
 python -m emotion_radar analyze-link URL --no-vision        # stop at contact sheet + report stub
+python -m emotion_radar analyze-link URL --no-specificity   # only Pass 1 + Pass 2 (skip Phase-6 specificity)
 python -m emotion_radar analyze-link URL --skip-evaluation  # disable auto-calibration on known fixtures
 python -m emotion_radar analyze-link URL --expected SPEC.json  # custom calibration spec
 python -m emotion_radar analyze-link URL --keep-temp        # keep raw mp4/frames for debugging
+
+# LOCAL SEED CLIPS (Phase 7): same three-pass pipeline, no Apify
+python -m emotion_radar analyze-file /path/to/clip.mp4
+python -m emotion_radar analyze-folder /path/to/folder --limit 10
+python -m emotion_radar analyze-folder /path/to/folder --recursive --limit 20
 
 # infrastructure-only (no vision): Apify -> contact sheet -> stub report
 python -m emotion_radar analyze-url https://www.tiktok.com/@user/video/123
@@ -167,6 +173,52 @@ The product/niche of the source video is **not** the asset. The mechanic
 is. The concepts are intentionally broad — they're meant to attach to
 many products later, not just the one in the source video. Two concepts
 that only differ in what object is on screen count as one concept.
+
+### Local seed clip ingestion (Phase 7)
+
+When you already have a folder of curated viral clips (e.g. a public
+Google Drive folder of known-viral hooks), use `analyze-file` /
+`analyze-folder` instead of `analyze-link`. They skip Apify entirely.
+
+Each seed-clip report carries this in `raw_analysis.source_metadata`:
+
+```json
+{
+  "source_type": "drive_seed_clip",
+  "source_filename": "lobster_bag_drop.mp4",
+  "known_viral": true,
+  "analytics_available": false,
+  "original_local_path": "/abs/path/to/lobster_bag_drop.mp4"
+}
+```
+
+Supported extensions: `.mp4 .mov .m4v .webm`.
+
+#### Pulling a public Drive folder with gdown
+
+```bash
+pip install gdown
+
+# Public folder URL goes here. --remaining-ok lets gdown skip files it
+# can't fetch (e.g. items requiring auth) rather than aborting.
+gdown --folder "https://drive.google.com/drive/folders/<FOLDER_ID>" \
+  -O data/imports/friend_drive --remaining-ok
+
+python -m emotion_radar analyze-folder data/imports/friend_drive --limit 10
+```
+
+#### analyze-folder behavior
+
+- **Non-recursive by default.** Use `--recursive` to walk subdirectories.
+- **Sorted by filename** for deterministic order.
+- **Default `--limit 5`** to avoid surprise vision-API cost. Raising the
+  limit prints a clear warning but is allowed.
+- **Continues on per-file failure** — one bad clip won't kill the batch.
+- **Batch summary** at the end: analyzed/failed counts, report ids,
+  dominant story flows, viral mechanics per file, failures.
+- **Does NOT auto-run calibration** per file. Seed clips don't have
+  analytics, and the Oliver canary only fires on a specific TikTok
+  video_id that local files won't match.
 
 ### Calibration / regression canary
 

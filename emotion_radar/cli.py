@@ -76,6 +76,10 @@ KNOWN_FIXTURES: dict[str, Path] = {
     "7623559389307211030": _PROJECT_ROOT / "docs" / "examples" / "oliver_expected.json",
 }
 
+# Phase 7: local seed-clip ingestion.
+SUPPORTED_VIDEO_EXTS: frozenset[str] = frozenset({".mp4", ".mov", ".m4v", ".webm"})
+DEFAULT_FOLDER_LIMIT = 5
+
 
 # ---- helpers ---------------------------------------------------------------
 
@@ -409,6 +413,23 @@ def _fields_from_result(result) -> dict[str, Any]:
     }
 
 
+def _carry_source_metadata(previous_report: dict[str, Any], fields: dict[str, Any]) -> None:
+    """The two-pass / three-pass merges build raw_analysis from scratch.
+    Phase 7 adds raw_analysis.source_metadata for local seed clips; this
+    helper carries that subfield across the overwrite so it survives
+    vision passes."""
+    prev_raw = previous_report.get("raw_analysis") or {}
+    if not isinstance(prev_raw, dict):
+        return
+    prev_meta = prev_raw.get("source_metadata")
+    if not isinstance(prev_meta, dict):
+        return
+    new_raw = fields.get("raw_analysis")
+    if not isinstance(new_raw, dict):
+        return
+    new_raw["source_metadata"] = prev_meta
+
+
 def _run_two_pass_and_update(
     report: dict[str, Any],
     sheet_path: Path,
@@ -437,6 +458,7 @@ def _run_two_pass_and_update(
         raise click.ClickException(f"Could not parse model output: {e}") from e
 
     fields = _fields_from_result(analysis_mod.build_two_pass_analysis_result(pass1, pass2))
+    _carry_source_metadata(report, fields)
     if not update_report_analysis(db_path, report["id"], fields):
         raise click.ClickException(
             f"DB update failed for report {report['id']} (row not found?)."
@@ -481,6 +503,7 @@ def _run_three_pass_and_update(
     fields = _fields_from_result(
         analysis_mod.build_three_pass_analysis_result(pass1, pass2, pass3)
     )
+    _carry_source_metadata(report, fields)
     if not update_report_analysis(db_path, report["id"], fields):
         raise click.ClickException(
             f"DB update failed for report {report['id']} (row not found?)."
@@ -835,6 +858,368 @@ def _print_evaluation(
         click.echo("\nCalibration failed. Do not trust this report yet.", err=True)
 
 
+# ============================================================================
+# Phase 7: local seed-clip ingestion (analyze-file, analyze-folder)
+# ============================================================================
+
+def _slugify_filename(stem: str) -> str:
+    """Build a SQL/path-safe video_id from a filename stem. Non-alphanum
+    runs collapse to single underscores; output is capped at 80 chars."""
+    safe = "".join(ch if ch.isalnum() else "_" for ch in stem)
+    # Collapse runs of underscores.
+    while "__" in safe:
+        safe = safe.replace("__", "_")
+    safe = safe.strip("_") or "untitled"
+    return safe[:80]
+
+
+def _find_video_files(folder: Path, recursive: bool = False) -> list[Path]:
+    """Find supported video files in `folder`. Non-recursive by default
+    (matches the documented analyze-folder behavior). Results sorted by
+    filename so per-run order is deterministic."""
+    iterator = folder.rglob("*") if recursive else folder.iterdir()
+    matched: list[Path] = []
+    for p in iterator:
+        if not p.is_file():
+            continue
+        if p.suffix.lower() in SUPPORTED_VIDEO_EXTS:
+            matched.append(p)
+    matched.sort(key=lambda p: p.name)
+    return matched
+
+
+def _local_seed_report_stub(video_path: Path) -> dict[str, Any]:
+    """Build the report dict for a local-seed-clip report row. No Apify
+    fields. source_metadata lives under raw_analysis so subsequent
+    vision passes can preserve it through the merge."""
+    source_metadata = {
+        "source_type": "drive_seed_clip",
+        "source_filename": video_path.name,
+        "known_viral": True,
+        "analytics_available": False,
+        "original_local_path": str(video_path),
+    }
+    return {
+        "platform": "seed_clip",
+        "source_url": None,
+        "submitted_url": video_path.as_uri(),
+        "video_id": _slugify_filename(video_path.stem),
+        "creator_username": None,
+        "creator_nickname": None,
+        "caption": None,
+        "metrics": {
+            "views": None, "likes": None, "comments": None,
+            "shares": None, "saves": None,
+        },
+        "duration": None,
+        "cover_url": None,
+        "video_download_url_saved": False,
+        "apify_run_id": None,
+        "apify_dataset_id": None,
+        "apify_usage_usd": None,
+        "apify_charged_events": None,
+        "contact_sheet_path": None,
+        "raw_analysis": {
+            "analysis_mode": "stub",
+            "source_metadata": source_metadata,
+        },
+        "error": None,
+    }
+
+
+def _ingest_local_video(
+    paths,
+    video_path: Path,
+    keep_temp: bool = False,
+) -> str:
+    """Build the frames + contact sheet for a local video and insert a
+    stub report row. Returns the new report_id. Errors during frame
+    extraction land on the report's `error` field; the row is still
+    inserted so the user can see what happened."""
+    paths.ensure()
+    report = _local_seed_report_stub(video_path)
+    video_id = report["video_id"]
+    frames_dir = paths.tmp_frames_dir / video_id
+
+    try:
+        click.echo(f"  extracting frames at {list(FRAME_TIMESTAMPS_SEC)}s ...")
+        frame_paths = extract_frames(video_path, frames_dir, FRAME_TIMESTAMPS_SEC)
+        sheet_path = paths.contact_sheets_dir / f"{video_id}.jpg"
+        click.echo(f"  building contact sheet -> {sheet_path}")
+        build_contact_sheet(
+            frame_paths,
+            list(FRAME_TIMESTAMPS_SEC),
+            sheet_path,
+        )
+        report["contact_sheet_path"] = str(sheet_path)
+    except (VideoError, OSError) as e:
+        report["error"] = f"{type(e).__name__}: {e}"
+    finally:
+        if not keep_temp:
+            remove_frame_dir(frames_dir)
+
+    return insert_report(paths.db_path, report)
+
+
+def _run_vision_phase_for_report(
+    paths,
+    report_id: str,
+    *,
+    no_vision: bool,
+    no_specificity: bool,
+    dry_run_vision: bool,
+    skip_evaluation: bool,
+    expected_path: str | None,
+    auto_fixture_lookup: bool = True,
+) -> None:
+    """The shared "post-infrastructure" half used by analyze-link,
+    analyze-file, and analyze-folder. Loads the report by id, decides
+    no-vision / dry-run / two-pass / three-pass, prints the final
+    summary, and runs calibration if a spec is available.
+
+    `auto_fixture_lookup=False` lets analyze-folder suppress per-file
+    fixture matching (a directory of seed clips shouldn't auto-evaluate
+    each file against the Oliver canary)."""
+    report = get_report(paths.db_path, report_id)
+    if not report:
+        raise click.ClickException(f"Could not load report {report_id}.")
+
+    if report.get("error"):
+        click.echo(f"\nPipeline error: {report['error']}")
+        _print_final_report(report)
+        return
+
+    if no_vision:
+        click.echo("\n--no-vision: skipping the two-pass analysis.")
+        _print_final_report(report)
+        return
+
+    sheet_path = _resolve_contact_sheet(report)
+
+    if dry_run_vision:
+        _print_dry_run_prompts(
+            report, sheet_path, paths.db_path, three_pass=not no_specificity,
+        )
+        _print_final_report(report)
+        return
+
+    if no_specificity:
+        _run_two_pass_and_update(report, sheet_path, paths.db_path)
+    else:
+        _run_three_pass_and_update(report, sheet_path, paths.db_path)
+
+    final_report = get_report(paths.db_path, report_id)
+    if not final_report:
+        raise click.ClickException("Report disappeared mid-pipeline.")
+
+    _print_final_report(final_report)
+
+    if skip_evaluation:
+        click.echo("\n(--skip-evaluation: calibration check skipped)")
+        return
+
+    auto = False
+    spec_path: Path | None = None
+    if expected_path:
+        spec_path = Path(expected_path)
+    elif auto_fixture_lookup:
+        video_id = (final_report.get("video_id") or "").strip()
+        fixture = KNOWN_FIXTURES.get(video_id)
+        if fixture and fixture.is_file():
+            spec_path = fixture
+            auto = True
+
+    if not spec_path:
+        return
+
+    try:
+        spec = load_expected(spec_path)
+    except (FileNotFoundError, ValueError) as e:
+        click.echo(f"\nCould not run evaluation: {e}", err=True)
+        return
+
+    eval_result = evaluate_report_fn(final_report, spec)
+    _print_evaluation(
+        eval_result,
+        spec_path=spec_path,
+        auto=auto,
+        actual_mechanic=final_report.get("emotional_mechanic"),
+    )
+
+
+def _print_batch_summary(
+    db_path: Path,
+    report_ids: list[str],
+    failures: list[tuple[str, str]],
+) -> None:
+    click.echo("\n" + ("=" * 60))
+    click.echo("BATCH SUMMARY")
+    click.echo("=" * 60)
+    click.echo(f"  Analyzed: {len(report_ids)}")
+    click.echo(f"  Failed:   {len(failures)}")
+    if report_ids:
+        click.echo("\n  Report IDs:")
+        for rid in report_ids:
+            click.echo(f"    - {rid}")
+        flow_counts: dict[str, int] = {}
+        mechanics: list[tuple[str, str]] = []
+        for rid in report_ids:
+            row = get_report(db_path, rid)
+            if not row:
+                continue
+            raw = row.get("raw_analysis") or {}
+            hsp = raw.get("hook_strategy_pass") if isinstance(raw, dict) else None
+            if isinstance(hsp, dict):
+                dom = (hsp.get("dominant_story_flow") or "").strip()
+                if dom:
+                    flow_counts[dom] = flow_counts.get(dom, 0) + 1
+                mech = hsp.get("viral_mechanic")
+                if isinstance(mech, str) and mech.strip():
+                    mechanics.append((rid, mech))
+        if flow_counts:
+            click.echo("\n  Dominant story flows:")
+            for flow, n in sorted(flow_counts.items(), key=lambda kv: -kv[1]):
+                click.echo(f"    {flow}: {n}")
+        if mechanics:
+            click.echo("\n  Viral mechanics:")
+            for rid, mech in mechanics:
+                click.echo(f"    [{rid}] {mech}")
+    if failures:
+        click.echo("\n  Failures:")
+        for path, err in failures:
+            click.echo(f"    - {path}: {err}")
+
+
+@cli.command("analyze-file")
+@click.argument("path", type=click.Path(exists=True, dir_okay=False))
+@click.option("--keep-temp", is_flag=True, default=False,
+              help="Keep extracted frames for debugging.")
+@click.option("--dry-run-vision", is_flag=True, default=False,
+              help="Run frame extraction + contact sheet, then print all vision prompts; no API call.")
+@click.option("--no-vision", is_flag=True, default=False,
+              help="Skip the vision passes entirely; produce only the infrastructure report stub.")
+@click.option("--no-specificity", is_flag=True, default=False,
+              help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
+@click.option("--skip-evaluation", is_flag=True, default=False,
+              help="Skip the calibration check, even for known video ids.")
+@click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
+              default=None, help="Calibration spec path.")
+@click.pass_context
+def analyze_file_cmd(
+    ctx: click.Context,
+    path: str,
+    keep_temp: bool,
+    dry_run_vision: bool,
+    no_vision: bool,
+    no_specificity: bool,
+    skip_evaluation: bool,
+    expected_path: str | None,
+) -> None:
+    """Analyze ONE local video file with the three-pass pipeline. No
+    Apify. Used for Drive seed clips and other local sources."""
+    paths = ctx.obj["paths"]
+    video_path = Path(path)
+    if video_path.suffix.lower() not in SUPPORTED_VIDEO_EXTS:
+        raise click.ClickException(
+            f"Unsupported video extension: {video_path.suffix!r}. "
+            f"Supported: {', '.join(sorted(SUPPORTED_VIDEO_EXTS))}"
+        )
+
+    click.echo(f"Analyzing local file: {video_path}")
+    click.echo("(seed clip — no Apify call, no analytics available.)")
+    report_id = _ingest_local_video(paths, video_path, keep_temp=keep_temp)
+    click.echo(f"  report id: {report_id}")
+
+    _run_vision_phase_for_report(
+        paths, report_id,
+        no_vision=no_vision,
+        no_specificity=no_specificity,
+        dry_run_vision=dry_run_vision,
+        skip_evaluation=skip_evaluation,
+        expected_path=expected_path,
+        auto_fixture_lookup=True,
+    )
+
+
+@cli.command("analyze-folder")
+@click.argument("folder", type=click.Path(exists=True, file_okay=False))
+@click.option("--limit", default=DEFAULT_FOLDER_LIMIT, show_default=True, type=int,
+              help=f"Max files to analyze. Default {DEFAULT_FOLDER_LIMIT}; raising it prints a cost warning.")
+@click.option("--recursive", is_flag=True, default=False,
+              help="Walk subdirectories. Default: only the immediate folder.")
+@click.option("--keep-temp", is_flag=True, default=False,
+              help="Keep extracted frames for debugging.")
+@click.option("--no-vision", is_flag=True, default=False,
+              help="Skip the vision passes entirely; produce only stubs.")
+@click.option("--no-specificity", is_flag=True, default=False,
+              help="Run only Pass 1 + Pass 2; skip the Phase-6 specificity pass.")
+@click.pass_context
+def analyze_folder_cmd(
+    ctx: click.Context,
+    folder: str,
+    limit: int,
+    recursive: bool,
+    keep_temp: bool,
+    no_vision: bool,
+    no_specificity: bool,
+) -> None:
+    """Analyze multiple local video files (Drive seed clips) in a folder.
+    Sorted by filename for deterministic order. Continues on per-file
+    failure and prints a batch summary at the end. Does NOT auto-run
+    calibration per file (seed clips have no analytics)."""
+    paths = ctx.obj["paths"]
+    folder_path = Path(folder)
+    files = _find_video_files(folder_path, recursive=recursive)
+    if not files:
+        raise click.ClickException(
+            f"No supported video files found in {folder_path}. "
+            f"Looking for: {', '.join(sorted(SUPPORTED_VIDEO_EXTS))}"
+        )
+
+    if limit > DEFAULT_FOLDER_LIMIT:
+        click.echo(
+            f"WARNING: --limit {limit} exceeds the safe default ({DEFAULT_FOLDER_LIMIT}). "
+            f"Each file runs the full three-pass vision pipeline; vision API "
+            f"calls may incur cost. Press Ctrl+C now if this is unintended."
+        )
+
+    selected = files[:limit]
+    click.echo(
+        f"Found {len(files)} video file(s) in {folder_path}; "
+        f"analyzing {len(selected)} (sorted by filename)."
+    )
+
+    report_ids: list[str] = []
+    failures: list[tuple[str, str]] = []
+    for i, video_path in enumerate(selected, start=1):
+        click.echo(f"\n[{i}/{len(selected)}] {video_path.name}")
+        try:
+            report_id = _ingest_local_video(paths, video_path, keep_temp=keep_temp)
+            click.echo(f"  report id: {report_id}")
+            _run_vision_phase_for_report(
+                paths, report_id,
+                no_vision=no_vision,
+                no_specificity=no_specificity,
+                dry_run_vision=False,
+                # batch mode never auto-evaluates per file; instead of
+                # passing skip_evaluation=True (which would print a
+                # per-file notice), we suppress auto-lookup and let
+                # spec_path stay None → silent return.
+                skip_evaluation=False,
+                expected_path=None,
+                auto_fixture_lookup=False,
+            )
+            report_ids.append(report_id)
+        except click.ClickException as e:
+            failures.append((str(video_path), e.message))
+            click.echo(f"  ! failed: {e.message}", err=True)
+        except Exception as e:  # noqa: BLE001 - one bad file should not kill the batch
+            failures.append((str(video_path), f"{type(e).__name__}: {e}"))
+            click.echo(f"  ! failed: {type(e).__name__}: {e}", err=True)
+
+    _print_batch_summary(paths.db_path, report_ids, failures)
+
+
 @cli.command("analyze-link")
 @click.argument("url")
 @click.option("--keep-temp", is_flag=True, default=False,
@@ -880,70 +1265,15 @@ def analyze_link_cmd(
     if not report:
         raise click.ClickException(f"Could not load freshly-inserted report {report_id}.")
 
-    # --- 2. If the pipeline errored, surface and exit. ---
-    if report.get("error"):
-        click.echo(f"\nPipeline error: {report['error']}")
-        _print_final_report(report)
-        return
-
-    # --- 3. Decide on vision behavior. ---
-    if no_vision:
-        click.echo("\n--no-vision: skipping the two-pass analysis.")
-        _print_final_report(report)
-        return
-
-    sheet_path = _resolve_contact_sheet(report)
-
-    if dry_run_vision:
-        _print_dry_run_prompts(
-            report, sheet_path, paths.db_path, three_pass=not no_specificity,
-        )
-        _print_final_report(report)
-        return
-
-    # --- 4. Vision + DB update (three-pass by default). ---
-    if no_specificity:
-        _run_two_pass_and_update(report, sheet_path, paths.db_path)
-    else:
-        _run_three_pass_and_update(report, sheet_path, paths.db_path)
-    final_report = get_report(paths.db_path, report_id)
-    if not final_report:
-        raise click.ClickException("Report disappeared mid-pipeline.")
-
-    # --- 5. Final summary. ---
-    _print_final_report(final_report)
-
-    # --- 6. Calibration. Manual --expected wins; otherwise auto on known ids. ---
-    if skip_evaluation:
-        click.echo("\n(--skip-evaluation: calibration check skipped)")
-        return
-
-    auto = False
-    spec_path: Path | None = None
-    if expected_path:
-        spec_path = Path(expected_path)
-    else:
-        video_id = (final_report.get("video_id") or "").strip()
-        fixture = KNOWN_FIXTURES.get(video_id)
-        if fixture and fixture.is_file():
-            spec_path = fixture
-            auto = True
-
-    if not spec_path:
-        return
-
-    try:
-        spec = load_expected(spec_path)
-    except (FileNotFoundError, ValueError) as e:
-        click.echo(f"\nCould not run evaluation: {e}", err=True)
-        return
-
-    eval_result = evaluate_report_fn(final_report, spec)
-    _print_evaluation(
-        eval_result,
-        spec_path=spec_path,
-        auto=auto,
-        actual_mechanic=final_report.get("emotional_mechanic"),
+    # --- 2-6. Vision passes + summary + calibration (shared helper) ---
+    _run_vision_phase_for_report(
+        paths, report_id,
+        no_vision=no_vision,
+        no_specificity=no_specificity,
+        dry_run_vision=dry_run_vision,
+        skip_evaluation=skip_evaluation,
+        expected_path=expected_path,
+        auto_fixture_lookup=True,
     )
 
 
