@@ -242,36 +242,50 @@ failed: ...` or `Pass 3 specificity JSON parse failed: ...`.
   analytics, and the Oliver canary only fires on a specific TikTok
   video_id that local files won't match.
 
-#### Layby workflow (Phase 7.2)
+#### Layby workflow (Phase 7.2 + 7.3)
 
 When you have a large folder of seed clips and you want to bank a few
 concepts at a time without paying for everything up front, use the
-layby pattern: `--skip-existing` + `--bank-fast`.
+layby pattern. Phase 7.3 adds `--bank-only`, which is the **recommended**
+mode for batch seed-clip ingestion: Pass 1 (visual evidence) plus a
+single compact bank-extract call, no full Pass 2, no Pass 3. Cheapest
+and most JSON-parse-reliable mode.
 
 ```bash
 # Download once.
 gdown --folder "https://drive.google.com/drive/folders/<FOLDER_ID>" \
   -O data/imports/friend_drive
 
-# Bank 5 fresh clips fast (Pass 1 + Pass 2 only, skip Pass 3 specificity).
-# --skip-existing scans past previously-processed files so --limit counts
-# only NEW work.
+# Bank 5 fresh clips compactly (recommended for seed clips).
+# --skip-existing scans past previously-processed files so --limit
+# counts only NEW work. --bank-only writes raw_analysis.bank_concept
+# with the compact viral-concept record.
 VISION_EVENT_MODEL=google/gemini-2.5-flash HOOK_STRATEGY_MODEL=gpt-4o \
   python -m emotion_radar analyze-folder data/imports/friend_drive \
-  --limit 5 --skip-existing --bank-fast
+  --limit 5 --skip-existing --bank-only
 
 # Run it again later — the first 5 are skipped; the next 5 get banked.
 VISION_EVENT_MODEL=google/gemini-2.5-flash HOOK_STRATEGY_MODEL=gpt-4o \
   python -m emotion_radar analyze-folder data/imports/friend_drive \
-  --limit 5 --skip-existing --bank-fast
+  --limit 5 --skip-existing --bank-only
 
-# When you find an interesting report, run Pass 3 on it specifically:
+# When you find an interesting bank_only report, upgrade it to full
+# three-pass output (variations + pioneer concepts + specific scenes).
+# analyze-report reuses the saved Pass 1 visual evidence — no second
+# vision call.
 python -m emotion_radar analyze-report <REPORT_ID>
 ```
 
-`--bank-fast` is a clearer alias for `--no-specificity`. Both skip the
-Phase-6 specificity-rewrite pass and bank only the Pass 1 + Pass 2
-concept data, which is the cheapest and most reliable mode.
+Modes recap (most restrictive wins on the same command):
+
+| Flag | Pass 1 | Pass 2 (full) | Bank extract | Pass 3 |
+|---|---|---|---|---|
+| (none) | ✓ | ✓ | — | ✓ |
+| `--no-specificity` / `--bank-fast` | ✓ | ✓ | — | — |
+| `--bank-only` | ✓ | — | ✓ | — |
+
+`--bank-only` takes precedence over `--no-specificity` / `--bank-fast`
+when both are passed.
 
 #### Partial save when Pass 3 fails
 

@@ -446,16 +446,46 @@ def _debug_paths_for(
     return (p1, p2, p3)
 
 
+def _bank_debug_paths_for(
+    data_dir: Path, report_id: str, raw_output_on_parse_error: bool,
+) -> tuple[Path | None, Path | None]:
+    """Phase 7.3: debug paths for bank-only mode (pass1 + bank extract)."""
+    if not raw_output_on_parse_error:
+        return (None, None)
+    base = Path(data_dir) / "debug" / "model_outputs"
+    return (
+        base / f"{report_id}_pass1_visual_event.txt",
+        base / f"{report_id}_bank_extract.txt",
+    )
+
+
+def _existing_pass1_from_report(report: dict[str, Any]) -> dict[str, Any] | None:
+    """Phase 7.3 upgrade path: bank_only reports already have a saved
+    visual_event_pass; reuse it instead of paying for Pass 1 again."""
+    raw = report.get("raw_analysis")
+    if not isinstance(raw, dict):
+        return None
+    candidate = raw.get("visual_event_pass")
+    if isinstance(candidate, dict) and candidate:
+        return candidate
+    return None
+
+
 def _run_two_pass_and_update(
     report: dict[str, Any],
     sheet_path: Path,
     db_path: Path,
     raw_output_on_parse_error: bool = False,
     data_dir: Path | None = None,
+    reuse_existing_pass1: bool = False,
 ) -> dict[str, Any]:
     """Two-pass run (Pass 1 + Pass 2 only). Used when the user passes
     --no-specificity for debugging. The default analyze-link /
-    analyze-report flow now uses three-pass."""
+    analyze-report flow now uses three-pass.
+
+    `reuse_existing_pass1` (Phase 7.3): when upgrading a bank_only
+    report, the saved visual_event_pass is reused so we don't pay for
+    Pass 1 a second time."""
     env = load_env()
     try:
         vision_provider, strategy_provider = _build_pass_providers(env)
@@ -471,11 +501,20 @@ def _run_two_pass_and_update(
         data_dir or Path("data"), report["id"], raw_output_on_parse_error, num_passes=2,
     )
 
+    sp = strategy_provider
+    existing_pass1 = _existing_pass1_from_report(report) if reuse_existing_pass1 else None
     try:
-        pass1, pass2 = analysis_mod.analyze_two_pass(
-            sheet_path, report, vision_provider, strategy_provider,
-            debug_pass1_path=debug_p1,
-            debug_pass2_path=debug_p2,
+        if existing_pass1 is not None:
+            click.echo("(reusing saved Pass 1 visual event from bank_only report)")
+            pass1 = existing_pass1
+        else:
+            pass1 = analysis_mod.extract_visual_event(
+                sheet_path, report, vision_provider, repair_provider=sp,
+                debug_save_path=debug_p1,
+            )
+        pass2 = analysis_mod.generate_hook_strategy(
+            report, pass1, sp, repair_provider=sp,
+            debug_save_path=debug_p2,
         )
     except VisionProviderError as e:
         raise click.ClickException(f"Vision provider failed: {e}") from e
@@ -497,6 +536,7 @@ def _run_three_pass_and_update(
     db_path: Path,
     raw_output_on_parse_error: bool = False,
     data_dir: Path | None = None,
+    reuse_existing_pass1: bool = False,
 ) -> dict[str, Any]:
     """Default flow: Pass 1 + Pass 2 + Pass 3 (specificity rewrite).
 
@@ -530,11 +570,16 @@ def _run_three_pass_and_update(
 
     # --- Pass 1 + Pass 2 (failures here mean no usable concept data) ---
     sp = strategy_provider
+    existing_pass1 = _existing_pass1_from_report(report) if reuse_existing_pass1 else None
     try:
-        pass1 = analysis_mod.extract_visual_event(
-            sheet_path, report, vision_provider, repair_provider=sp,
-            debug_save_path=debug_p1,
-        )
+        if existing_pass1 is not None:
+            click.echo("(reusing saved Pass 1 visual event from bank_only report)")
+            pass1 = existing_pass1
+        else:
+            pass1 = analysis_mod.extract_visual_event(
+                sheet_path, report, vision_provider, repair_provider=sp,
+                debug_save_path=debug_p1,
+            )
         pass2 = analysis_mod.generate_hook_strategy(
             report, pass1, sp, repair_provider=sp,
             debug_save_path=debug_p2,
@@ -588,6 +633,58 @@ def _run_three_pass_and_update(
     return three_pass_fields
 
 
+def _run_bank_only_and_update(
+    report: dict[str, Any],
+    sheet_path: Path,
+    db_path: Path,
+    raw_output_on_parse_error: bool = False,
+    data_dir: Path | None = None,
+) -> dict[str, Any]:
+    """Phase 7.3: Pass 1 + compact bank extract. No full Pass 2, no
+    Pass 3. Used to bank curated seed clips cheaply and reliably; the
+    user upgrades selected reports later via analyze-report."""
+    env = load_env()
+    try:
+        vision_provider, strategy_provider = _build_pass_providers(env)
+    except VisionProviderError as e:
+        raise click.ClickException(str(e)) from e
+
+    taste = build_taste_summary(db_path)
+    click.echo(
+        f"Pass 1 (visual event)  : {vision_provider.model}\n"
+        f"Bank extract (concept) : {strategy_provider.model}"
+    )
+    if taste:
+        click.echo("(Bank extract will see a compact taste-profile snippet.)")
+    click.echo("(Vision API may incur cost — bank mode is cheaper than three-pass.)")
+
+    debug_p1, debug_bank = _bank_debug_paths_for(
+        data_dir or Path("data"), report["id"], raw_output_on_parse_error,
+    )
+
+    try:
+        pass1, bank = analysis_mod.analyze_bank_only(
+            sheet_path, report, vision_provider, strategy_provider,
+            taste_profile=taste,
+            debug_pass1_path=debug_p1,
+            debug_bank_path=debug_bank,
+        )
+    except VisionProviderError as e:
+        raise click.ClickException(f"Vision provider failed: {e}") from e
+    except ValueError as e:
+        raise click.ClickException(f"Could not parse model output: {e}") from e
+
+    fields = _fields_from_result(
+        analysis_mod.build_bank_only_analysis_result(pass1, bank)
+    )
+    _carry_source_metadata(report, fields)
+    if not update_report_analysis(db_path, report["id"], fields):
+        raise click.ClickException(
+            f"DB update failed for report {report['id']} (row not found?)."
+        )
+    return fields
+
+
 @cli.command("analyze-report")
 @click.argument("report_id")
 @click.option("--dry-run", is_flag=True, default=False,
@@ -616,11 +713,26 @@ def analyze_report_cmd(
         )
         return
 
+    # Phase 7.3: if this is a bank_only report, reuse the saved Pass 1
+    # evidence instead of paying for a second vision call.
+    raw = report.get("raw_analysis")
+    is_bank_only_upgrade = (
+        isinstance(raw, dict) and raw.get("analysis_mode") == "bank_only"
+        and isinstance(raw.get("visual_event_pass"), dict)
+        and bool(raw.get("visual_event_pass"))
+    )
+    if is_bank_only_upgrade:
+        click.echo(
+            "\nUpgrading bank_only report — reusing saved Pass 1 visual event "
+            "(no extra vision call)."
+        )
+
     if no_specificity:
         fields = _run_two_pass_and_update(
             report, sheet_path, paths.db_path,
             raw_output_on_parse_error=raw_output_on_parse_error,
             data_dir=paths.data_dir,
+            reuse_existing_pass1=is_bank_only_upgrade,
         )
         click.echo("\n=== Two-pass analysis ===")
     else:
@@ -628,10 +740,11 @@ def analyze_report_cmd(
             report, sheet_path, paths.db_path,
             raw_output_on_parse_error=raw_output_on_parse_error,
             data_dir=paths.data_dir,
+            reuse_existing_pass1=is_bank_only_upgrade,
         )
         click.echo("\n=== Three-pass analysis ===")
     click.echo(json.dumps(fields, indent=2, ensure_ascii=False, sort_keys=True))
-    click.echo(f"\nUpdated report {report_id}.")
+    click.echo(f"\nUpgraded report {report_id}." if is_bank_only_upgrade else f"\nUpdated report {report_id}.")
 
 
 def _fmt_score(v: Any) -> str:
@@ -647,6 +760,89 @@ _DISTANCE_LABELS = {
 }
 
 
+def _print_bank_only_header(report: dict[str, Any]) -> None:
+    """Compact header shared with _print_bank_only_report so bank mode
+    still shows the standard id / source / contact-sheet line."""
+    click.echo("\nEmotion Radar Report (bank_only)")
+    click.echo("=" * 60)
+    click.echo(f"Report ID:       {report.get('id')}")
+    click.echo(f"Source:          {report.get('source_url') or report.get('submitted_url')}")
+    click.echo(f"Contact Sheet:   {report.get('contact_sheet_path') or '—'}")
+    if report.get("error"):
+        click.echo(f"\nERROR: {report['error']}")
+
+
+def _print_bank_only_report(report: dict[str, Any]) -> None:
+    """Phase 7.3: compact summary for bank-only reports. Renders the
+    bank_concept fields the user spec calls out explicitly."""
+    raw = report.get("raw_analysis") or {}
+    bank: dict[str, Any] = {}
+    if isinstance(raw, dict):
+        v = raw.get("bank_concept")
+        if isinstance(v, dict):
+            bank = v
+    source_meta = {}
+    if isinstance(raw, dict):
+        sm = raw.get("source_metadata")
+        if isinstance(sm, dict):
+            source_meta = sm
+    scores = bank.get("scores") if isinstance(bank.get("scores"), dict) else {}
+
+    click.echo("\nBanked Concept")
+    click.echo("-" * 60)
+    click.echo(f"Report ID:              {report.get('id')}")
+    src_file = source_meta.get("source_filename") or "—"
+    click.echo(f"Source Filename:        {src_file}")
+    click.echo(f"Concept Name:           {bank.get('concept_name') or '—'}")
+    click.echo(f"Dominant Story Flow:    {bank.get('dominant_story_flow') or '—'}")
+    click.echo(f"Viral Mechanic:         {bank.get('viral_mechanic') or '—'}")
+    click.echo(f"Viewer Role:            {bank.get('viewer_role') or '—'}")
+    click.echo(f"Why It Works:           {bank.get('why_it_works') or '—'}")
+    click.echo(f"Scroll-stop Reason:     {bank.get('scroll_stop_reason') or '—'}")
+    click.echo(f"Comment Trigger:        {bank.get('comment_trigger') or '—'}")
+    click.echo(f"Share Trigger:          {bank.get('share_trigger') or '—'}")
+    click.echo(f"Key Visual Pattern:     {bank.get('key_visual_pattern') or '—'}")
+    click.echo(f"Key Text Pattern:       {bank.get('key_text_pattern') or '—'}")
+    click.echo(f"Freshness Angle:        {bank.get('freshness_angle') or '—'}")
+    cooked = bank.get("cooked_elements") or []
+    if isinstance(cooked, list) and cooked:
+        click.echo("Cooked Elements:")
+        for item in cooked:
+            click.echo(f"  - {item}")
+    else:
+        click.echo("Cooked Elements:        —")
+    emotions = bank.get("emotions_triggered") or []
+    if isinstance(emotions, list) and emotions:
+        click.echo(f"Emotions Triggered:     {', '.join(emotions)}")
+    click.echo(f"Ethical Risk Notes:     {bank.get('ethical_risk_notes') or '—'}")
+    click.echo(f"What To Learn:          {bank.get('what_to_learn_from_it') or '—'}")
+    click.echo(f"What Not To Copy:       {bank.get('what_not_to_copy') or '—'}")
+    mp = bank.get("mutation_paths") or []
+    if isinstance(mp, list) and mp:
+        click.echo("Mutation Paths:")
+        for item in mp:
+            click.echo(f"  - {item}")
+    else:
+        click.echo("Mutation Paths:         —")
+
+    click.echo("\nScores")
+    click.echo("-" * 60)
+    click.echo(f"  Scroll-stop strength:  {_fmt_score(scores.get('scroll_stop_strength_score'))}")
+    click.echo(f"  Comment likelihood:    {_fmt_score(scores.get('comment_likelihood_score'))}")
+    click.echo(f"  Share likelihood:      {_fmt_score(scores.get('share_likelihood_score'))}")
+    click.echo(f"  Viewer role strength:  {_fmt_score(scores.get('viewer_role_strength_score'))}")
+    click.echo(f"  Freshness:             {_fmt_score(scores.get('freshness_score'))}")
+    click.echo(f"  Cooked:                {_fmt_score(scores.get('cooked_score'))}")
+    click.echo(f"  Ethical risk:          {_fmt_score(scores.get('ethical_risk_score'))}")
+    click.echo(f"  Virality capability:   {_fmt_score(scores.get('virality_capability_score'))}")
+
+    click.echo(
+        "\n(Bank-only mode. To generate variations + pioneer concepts + "
+        "specific scenes, run:  python -m emotion_radar analyze-report "
+        f"{report.get('id')})"
+    )
+
+
 def _print_final_report(report: dict[str, Any]) -> None:
     """Phase-4 viral-mechanic summary for analyze-link.
 
@@ -654,7 +850,19 @@ def _print_final_report(report: dict[str, Any]) -> None:
     trigger, share trigger, cooked elements, virality scores, and the 8
     broad hook concepts grouped by creative_distance. Product
     attachability is intentionally de-emphasised — the goal is the
-    mechanic, not the product."""
+    mechanic, not the product.
+
+    Phase 7.3: branches early to _print_bank_only_report when the row
+    is in bank_only mode, so banked seed clips render a compact summary
+    instead of the empty-section three-pass layout."""
+    raw_check = report.get("raw_analysis")
+    if isinstance(raw_check, dict) and raw_check.get("analysis_mode") == "bank_only":
+        # Still print the basic header so the report id / engagement /
+        # contact sheet path appear consistently, then hand off.
+        _print_bank_only_header(report)
+        _print_bank_only_report(report)
+        return
+
     metrics = report.get("metrics") or {}
     raw = report.get("raw_analysis") or {}
     hsp: dict[str, Any] = {}
@@ -1057,11 +1265,13 @@ def _seed_clip_already_processed(
 
 
 def _classify_report_status(row: dict[str, Any] | None) -> str:
-    """Phase 7.2: bucket a seed-clip report by completion state.
+    """Phase 7.2 / 7.3: bucket a seed-clip report by completion state.
 
     Returns one of:
-      - "full"     three-pass succeeded, OR two-pass intentional
-                   (--no-specificity / --bank-fast) with no error.
+      - "full"     three-pass succeeded, two-pass intentional
+                   (--no-specificity / --bank-fast), OR bank_only
+                   intentional (--bank-only). All "user got the mode
+                   they asked for" outcomes.
       - "partial"  two-pass saved, Pass 3 attempted and failed.
       - "failed"   error column set; no usable concept data.
       - "stub"     no analysis ran (defensive fallback).
@@ -1076,7 +1286,7 @@ def _classify_report_status(row: dict[str, Any] | None) -> str:
     if raw.get("specificity_status") == "failed":
         return "partial"
     mode = raw.get("analysis_mode")
-    if mode in ("three_pass", "two_pass"):
+    if mode in ("three_pass", "two_pass", "bank_only"):
         return "full"
     return "stub"
 
@@ -1131,6 +1341,7 @@ def _run_vision_phase_for_report(
     expected_path: str | None,
     auto_fixture_lookup: bool = True,
     raw_output_on_parse_error: bool = False,
+    bank_only: bool = False,
 ) -> None:
     """The shared "post-infrastructure" half used by analyze-link,
     analyze-file, and analyze-folder. Loads the report by id, decides
@@ -1163,7 +1374,15 @@ def _run_vision_phase_for_report(
         _print_final_report(report)
         return
 
-    if no_specificity:
+    # Phase 7.3: --bank-only is the strictest mode and takes precedence
+    # over --no-specificity / --bank-fast (which are themselves aliases).
+    if bank_only:
+        _run_bank_only_and_update(
+            report, sheet_path, paths.db_path,
+            raw_output_on_parse_error=raw_output_on_parse_error,
+            data_dir=paths.data_dir,
+        )
+    elif no_specificity:
         _run_two_pass_and_update(
             report, sheet_path, paths.db_path,
             raw_output_on_parse_error=raw_output_on_parse_error,
@@ -1251,19 +1470,39 @@ def _print_batch_summary(
     if all_concept_ids:
         flow_counts: dict[str, int] = {}
         mechanics: list[tuple[str, str]] = []
+        cooked_seen: dict[str, int] = {}
         for rid in all_concept_ids:
             row = get_report(db_path, rid)
             if not row:
                 continue
             raw = row.get("raw_analysis") or {}
-            hsp = raw.get("hook_strategy_pass") if isinstance(raw, dict) else None
-            if isinstance(hsp, dict):
-                dom = (hsp.get("dominant_story_flow") or "").strip()
-                if dom:
-                    flow_counts[dom] = flow_counts.get(dom, 0) + 1
-                mech = hsp.get("viral_mechanic")
-                if isinstance(mech, str) and mech.strip():
-                    mechanics.append((rid, mech))
+            if not isinstance(raw, dict):
+                continue
+            # Phase 7.3: concept fields live in hook_strategy_pass (full/partial)
+            # OR bank_concept (bank_only). Look in both, with hook_strategy
+            # taking precedence when both happen to be present.
+            concept_view: dict[str, Any] | None = None
+            hsp = raw.get("hook_strategy_pass")
+            if isinstance(hsp, dict) and hsp:
+                concept_view = hsp
+            else:
+                bc = raw.get("bank_concept")
+                if isinstance(bc, dict) and bc:
+                    concept_view = bc
+            if concept_view is None:
+                continue
+            dom = (concept_view.get("dominant_story_flow") or "").strip()
+            if dom:
+                flow_counts[dom] = flow_counts.get(dom, 0) + 1
+            mech = concept_view.get("viral_mechanic")
+            if isinstance(mech, str) and mech.strip():
+                mechanics.append((rid, mech))
+            # Phase 7.3: aggregate cooked patterns across the batch.
+            cooked = concept_view.get("cooked_elements")
+            if isinstance(cooked, list):
+                for item in cooked:
+                    if isinstance(item, str) and item.strip():
+                        cooked_seen[item] = cooked_seen.get(item, 0) + 1
         if flow_counts:
             click.echo("\n  Dominant story flows:")
             for flow, n in sorted(flow_counts.items(), key=lambda kv: -kv[1]):
@@ -1272,6 +1511,10 @@ def _print_batch_summary(
             click.echo("\n  Viral mechanics:")
             for rid, mech in mechanics:
                 click.echo(f"    [{rid}] {mech}")
+        if cooked_seen:
+            click.echo("\n  Cooked elements seen:")
+            for item, n in sorted(cooked_seen.items(), key=lambda kv: -kv[1])[:10]:
+                click.echo(f"    {item} ({n})")
 
     if skipped:
         click.echo("\n  Skipped files:")
@@ -1299,6 +1542,10 @@ def _print_batch_summary(
 @click.option("--bank-fast", is_flag=True, default=False,
               help="Alias for --no-specificity. Bank Pass 1 + Pass 2 concept data only; "
                    "fastest / cheapest mode, useful for batch seed-clip processing.")
+@click.option("--bank-only", is_flag=True, default=False,
+              help="Phase 7.3: compact Pass 1 + bank-extract only. No full Pass 2, no Pass 3. "
+                   "Strictest mode; takes precedence over --no-specificity / --bank-fast. "
+                   "Use `analyze-report REPORT_ID` later to upgrade selected reports to full analysis.")
 @click.option("--skip-evaluation", is_flag=True, default=False,
               help="Skip the calibration check, even for known video ids.")
 @click.option("--expected", "expected_path", type=click.Path(exists=True, dir_okay=False),
@@ -1314,6 +1561,7 @@ def analyze_file_cmd(
     no_vision: bool,
     no_specificity: bool,
     bank_fast: bool,
+    bank_only: bool,
     skip_evaluation: bool,
     expected_path: str | None,
     raw_output_on_parse_error: bool,
@@ -1343,6 +1591,7 @@ def analyze_file_cmd(
         expected_path=expected_path,
         auto_fixture_lookup=True,
         raw_output_on_parse_error=raw_output_on_parse_error,
+        bank_only=bank_only,
     )
 
 
@@ -1365,6 +1614,11 @@ def analyze_file_cmd(
 @click.option("--bank-fast", is_flag=True, default=False,
               help="Alias for --no-specificity. Bank Pass 1 + Pass 2 concept data only; "
                    "fastest / cheapest mode for batch seed-clip processing.")
+@click.option("--bank-only", is_flag=True, default=False,
+              help="Phase 7.3: compact Pass 1 + bank-extract only. Recommended for layby "
+                   "seed-clip ingestion — cheapest and most JSON-parse-reliable mode. "
+                   "Takes precedence over --no-specificity / --bank-fast. Upgrade interesting "
+                   "reports later with `analyze-report REPORT_ID`.")
 @click.option("--raw-output-on-parse-error", is_flag=True, default=False,
               help="On parse failure, save the raw model output to data/debug/model_outputs/ for inspection.")
 @click.pass_context
@@ -1378,6 +1632,7 @@ def analyze_folder_cmd(
     no_vision: bool,
     no_specificity: bool,
     bank_fast: bool,
+    bank_only: bool,
     raw_output_on_parse_error: bool,
 ) -> None:
     """Analyze local video files (Drive seed clips) in a folder. Sorted
@@ -1449,6 +1704,7 @@ def analyze_folder_cmd(
                 expected_path=None,
                 auto_fixture_lookup=False,
                 raw_output_on_parse_error=raw_output_on_parse_error,
+                bank_only=bank_only,
             )
             # Classify by reloading the row's final state.
             row = get_report(paths.db_path, report_id)

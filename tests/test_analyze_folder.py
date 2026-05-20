@@ -498,6 +498,222 @@ def test_bank_fast_and_no_specificity_both_accepted_and_compose(
     assert rows[0]["raw_analysis"]["analysis_mode"] == "two_pass"
 
 
+# ============================================================================
+# Phase 7.3: --bank-only mode
+# ============================================================================
+
+BANK_GOOD_RESPONSE = {
+    "bank_concept": {
+        "concept_name": "Stall Smash + Be Honest",
+        "visual_hook_summary": "stranger drops handmade dragon lamp at market stall",
+        "viral_mechanic": "public disrespect + underdog maker",
+        "dominant_story_flow": "public_disrespect_viewer_defense",
+        "matched_story_flows": [
+            {"id": "public_disrespect_viewer_defense",
+             "name": "Public Disrespect -> Viewer Defense",
+             "confidence": 0.92,
+             "why_matched": "destruction of handmade item"},
+        ],
+        "story_flow_steps_observed": ["stall display", "stranger drops lamp", "maker reacts"],
+        "viewer_role": "defender",
+        "emotions_triggered": ["anger", "protectiveness"],
+        "comment_trigger": "urge to retaliate on behalf of maker",
+        "share_trigger": "shared injustice send",
+        "why_it_works": "moral violation against underdog self-casts viewer as defender",
+        "scroll_stop_reason": "physical destruction in first 2s",
+        "key_visual_pattern": "intact object -> broken on ground",
+        "key_text_pattern": "vulnerable-framing caption",
+        "freshness_angle": "physical-destruction tier",
+        "cooked_elements": ["please be honest framing", "staged-stranger trope"],
+        "ethical_risk_notes": "low",
+        "what_to_learn_from_it": "destruction + vulnerable caption is the engine",
+        "what_not_to_copy": "the exact 'please be honest' wording",
+        "mutation_paths": [
+            "swap maker for a child being defended",
+            "swap destruction for verbal escalation",
+        ],
+        "scores": {
+            "scroll_stop_strength_score": 0.86,
+            "comment_likelihood_score": 0.82,
+            "share_likelihood_score": 0.7,
+            "viewer_role_strength_score": 0.83,
+            "freshness_score": 0.7,
+            "cooked_score": 0.35,
+            "ethical_risk_score": 0.28,
+            "virality_capability_score": 0.78,
+        },
+    },
+}
+
+
+def _patch_providers_bank(monkeypatch, pass1_text: str, bank_text: str):
+    """Mock builder that returns Pass 1 from the vision provider and a
+    single bank-extract response from the strategy provider."""
+    class _MP:
+        name = "mock"
+        def __init__(self, label, image, texts):
+            self.model = label; self._image = image
+            self._texts = list(texts); self._i = 0
+            self.image_calls: list = []
+            self.text_calls: list = []
+        def analyze_image(self, *a, **kw):
+            self.image_calls.append({})
+            return self._image
+        def analyze_text(self, *a, **kw):
+            self.text_calls.append({})
+            if self._i < len(self._texts):
+                r = self._texts[self._i]; self._i += 1; return r
+            return self._texts[-1] if self._texts else "{}"
+
+    def _fake_build(env, role):
+        if role == "vision_event":
+            return _MP("v", pass1_text, [""])
+        return _MP("s", "", [bank_text])
+    monkeypatch.setattr(cli_mod, "build_provider_for_role", _fake_build)
+
+
+def test_bank_only_runs_pass1_plus_bank_extract_only(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    folder = _make_folder(tmp_path, ["alpha.mp4"])
+    _patch_providers_bank(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        bank_text=json.dumps(BANK_GOOD_RESPONSE),
+    )
+    result = _invoke(tmp_path, "analyze-folder", str(folder), "--bank-only")
+    assert result.exit_code == 0, result.output
+    # CLI announces bank mode labels.
+    assert "Pass 1 (visual event)" in result.output
+    assert "Bank extract (concept)" in result.output
+    # Full Pass 2 / Pass 3 are NOT announced.
+    assert "Pass 2 (hook strategy)" not in result.output
+    assert "Pass 3 (specificity)" not in result.output
+
+
+def test_bank_only_sets_analysis_mode_and_preserves_metadata(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    folder = _make_folder(tmp_path, ["lobster_drop.mp4"])
+    _patch_providers_bank(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        bank_text=json.dumps(BANK_GOOD_RESPONSE),
+    )
+    result = _invoke(tmp_path, "analyze-folder", str(folder), "--bank-only")
+    assert result.exit_code == 0, result.output
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
+    assert len(rows) == 1
+    row = rows[0]
+    raw = row["raw_analysis"]
+    assert raw["analysis_mode"] == "bank_only"
+    assert raw["bank_concept"]["dominant_story_flow"] == "public_disrespect_viewer_defense"
+    # Pass 1 evidence is in raw_analysis (so analyze-report can reuse it).
+    assert raw["visual_event_pass"]["conflict_type"] == "smash"
+    # source_metadata still attached.
+    assert raw["source_metadata"]["source_filename"] == "lobster_drop.mp4"
+    # Top-level field mapping.
+    assert row["visual_hook_summary"].startswith("stranger drops")
+    assert row["onscreen_text"] == "Please be honest, how are they?"
+    assert row["emotional_mechanic"] == "public disrespect + underdog maker"
+    assert row["viewer_role"] == "defender"
+    assert row["emotions_triggered"] == ["anger", "protectiveness"]
+    assert row["overall_opportunity_score"] == 0.78
+
+
+def test_bank_only_summary_prints_banked_concept_layout(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    folder = _make_folder(tmp_path, ["clip.mp4"])
+    _patch_providers_bank(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        bank_text=json.dumps(BANK_GOOD_RESPONSE),
+    )
+    result = _invoke(tmp_path, "analyze-folder", str(folder), "--bank-only")
+    assert result.exit_code == 0, result.output
+    out = result.output
+    # The compact 'Banked Concept' layout, not the full report layout.
+    assert "Banked Concept" in out
+    assert "Concept Name:" in out
+    assert "Dominant Story Flow:" in out
+    assert "Viral Mechanic:" in out
+    assert "Comment Trigger:" in out
+    assert "Share Trigger:" in out
+    assert "Cooked Elements:" in out
+    assert "What To Learn:" in out
+    assert "What Not To Copy:" in out
+    assert "Mutation Paths:" in out
+    assert "Virality capability:" in out
+    # Pointer to upgrade.
+    assert "analyze-report" in out
+    # Full three-pass sections do NOT appear in bank mode.
+    assert "SPECIFIC HOOK SCENES" not in out
+    assert "PIONEER CONCEPTS" not in out
+
+
+def test_bank_only_batch_summary_aggregates_flows_from_bank_concept(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    folder = _make_folder(tmp_path, ["alpha.mp4", "beta.mp4"])
+    _patch_providers_bank(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        bank_text=json.dumps(BANK_GOOD_RESPONSE),
+    )
+    result = _invoke(tmp_path, "analyze-folder", str(folder), "--bank-only")
+    assert result.exit_code == 0, result.output
+    # Dominant flows are extracted from bank_concept, not hook_strategy_pass.
+    assert "Dominant story flows:" in result.output
+    assert "public_disrespect_viewer_defense: 2" in result.output
+    # Cooked-elements aggregation works for bank mode too.
+    assert "Cooked elements seen:" in result.output
+
+
+def test_bank_only_takes_precedence_over_bank_fast_and_no_specificity(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    folder = _make_folder(tmp_path, ["alpha.mp4"])
+    _patch_providers_bank(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        bank_text=json.dumps(BANK_GOOD_RESPONSE),
+    )
+    result = _invoke(
+        tmp_path, "analyze-folder", str(folder),
+        "--bank-only", "--no-specificity", "--bank-fast",
+    )
+    assert result.exit_code == 0, result.output
+    rows = list_reports(tmp_path / "emotion_radar.db", limit=20)
+    assert rows[0]["raw_analysis"]["analysis_mode"] == "bank_only"
+
+
+def test_skip_existing_treats_bank_only_as_existing(
+    mock_local_infrastructure, monkeypatch, tmp_path: Path,
+):
+    """A bank_only report counts as 'already processed' for the layby
+    rerun pattern. Re-running with --skip-existing should skip it."""
+    folder = _make_folder(tmp_path, ["alpha.mp4"])
+    _patch_providers_bank(
+        monkeypatch,
+        pass1_text=json.dumps(PASS1_OLIVER_GOOD),
+        bank_text=json.dumps(BANK_GOOD_RESPONSE),
+    )
+    first = _invoke(tmp_path, "analyze-folder", str(folder), "--bank-only")
+    assert first.exit_code == 0
+    assert len(list_reports(tmp_path / "emotion_radar.db", limit=20)) == 1
+
+    second = _invoke(
+        tmp_path, "analyze-folder", str(folder),
+        "--bank-only", "--skip-existing",
+    )
+    assert second.exit_code == 0, second.output
+    assert "skip alpha.mp4" in second.output
+    assert "Skipped (already done):   1" in second.output
+    # No new row.
+    assert len(list_reports(tmp_path / "emotion_radar.db", limit=20)) == 1
+
+
 def test_layby_workflow_skip_existing_plus_bank_fast(
     mock_local_infrastructure, monkeypatch, tmp_path: Path,
 ):

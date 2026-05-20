@@ -939,6 +939,288 @@ def analyze_three_pass(
     return pass1, pass2, pass3
 
 
+# ============================================================================
+# Bank-only mode — compact concept extraction for seed clips (Phase 7.3)
+# ============================================================================
+#
+# Bank-only is a SUBSTITUTE for Pass 2 / Pass 3 when the caller wants to
+# bank a curated viral clip rather than generate creative output. It runs:
+#   Pass 1 (visual event) -> bank concept extract (single text call).
+#
+# It produces a compact structured record in raw_analysis.bank_concept.
+# Variations / pioneer_concepts / scene_concepts are intentionally NOT
+# produced. The user upgrades selected reports later by running
+# `analyze-report REPORT_ID`, which reuses the saved Pass 1 evidence
+# (no duplicate vision call) and runs the full Pass 2 + Pass 3.
+
+_BASE_BANK_EXTRACT_PROMPT = """You are a viral-concept banker.
+
+You will receive Pass 1's frame-by-frame visual evidence from a short-form video that the user has chosen as a CURATED viral example (often from a small Drive folder of known-viral clips). Analytics may be unavailable; treat the clip as a confirmed positive.
+
+Your job is to produce a COMPACT, structured concept record so the LLM can reference it later as banked example data. You are NOT generating new ideas.
+
+# What you do NOT produce
+
+  - variations,
+  - pioneer concepts,
+  - specific hook scenes / scene_concepts,
+  - product / niche swap lists.
+
+Those belong to the full Pass 2 / Pass 3 pipeline (`analyze-report REPORT_ID` runs them later when the user wants creative output).
+
+# What you DO produce
+
+  - a 2-5 word concept_name,
+  - the viral_mechanic in one line,
+  - the dominant_story_flow id (from the library below; verbatim),
+  - matched_story_flows list with confidences and one-line `why_matched`,
+  - story_flow_steps_observed (concrete steps actually visible in the source, NOT the library's canonical steps copy-pasted),
+  - viewer_role, emotions_triggered, comment_trigger, share_trigger,
+  - why_it_works in 1-2 sentences,
+  - scroll_stop_reason (1 line),
+  - key_visual_pattern and key_text_pattern (1 line each — the structural patterns to remember),
+  - freshness_angle (what makes it not cooked yet),
+  - cooked_elements (named saturated parts to NOT recycle directly),
+  - ethical_risk_notes,
+  - what_to_learn_from_it (the transferable lesson),
+  - what_not_to_copy (specific parts that would be cringe / cooked if reused),
+  - 3-5 broad mutation_paths (ONE LINE EACH; broad directions only, NOT full ideas; the full ideas come later in analyze-report),
+  - the scores block.
+
+# Mental model: product is secondary, viral mechanic is primary
+
+The product / niche of the source clip is NOT the asset. The MECHANIC is. Bank the mechanic.
+
+# Pass 1 evidence is BINDING
+
+  - Do NOT call any action "accidental" unless Pass 1 explicitly says so.
+  - If Pass 1 reports destruction (dropped / broken / smashed / thrown / on the ground) AND on-screen text has rejection / insult framing, the mechanic IS public disrespect + underdog maker.
+  - If Pass 1 visual_conflict_detected is true, the conflict must be central in viral_mechanic and why_it_works.
+
+# Story Flow Library (use library ids VERBATIM)
+
+"""
+
+_BANK_EXTRACT_TAIL = """
+
+# Matching guidance
+
+Choose the best library flow as `dominant_story_flow`. Multiple flows can match — list each in `matched_story_flows` with a confidence in [0, 1] and a one-line `why_matched`. If no library flow fits, set `dominant_story_flow` to "" and propose a provisional flow label in `viral_mechanic`.
+
+# Mutation paths
+
+`mutation_paths` are 3-5 BROAD directions for variations of this mechanic, ONE LINE EACH. They are NOT full hook ideas. Example:
+  - "swap maker for child being defended by parent"
+  - "swap public-stall setting for online-marketplace screenshot"
+  - "swap destruction for verbal insult escalation"
+Do NOT write full first_2_seconds scenes or product-attached pitches here. Those come from `analyze-report` later.
+
+# Scores (each in [0, 1])
+
+  - scroll_stop_strength_score
+  - comment_likelihood_score
+  - share_likelihood_score
+  - viewer_role_strength_score
+  - freshness_score
+  - cooked_score
+  - ethical_risk_score (raise to >= 0.7 for ethical-edge-vulnerability mechanics)
+  - virality_capability_score (overall summary; weight scroll-stop + comment/share + viewer-role)
+
+# Output schema (return EXACTLY this top-level shape)
+
+{
+  "bank_concept": {
+    "concept_name": string,
+    "visual_hook_summary": string,
+    "viral_mechanic": string,
+    "dominant_story_flow": string,
+    "matched_story_flows": [
+      { "id": string, "name": string, "confidence": number, "why_matched": string }
+    ],
+    "story_flow_steps_observed": [string, ...],
+    "viewer_role": string,
+    "emotions_triggered": [string, ...],
+    "comment_trigger": string,
+    "share_trigger": string,
+    "why_it_works": string,
+    "scroll_stop_reason": string,
+    "key_visual_pattern": string,
+    "key_text_pattern": string,
+    "freshness_angle": string,
+    "cooked_elements": [string, ...],
+    "ethical_risk_notes": string,
+    "what_to_learn_from_it": string,
+    "what_not_to_copy": string,
+    "mutation_paths": [string, ...],
+    "scores": {
+      "scroll_stop_strength_score": number,
+      "comment_likelihood_score": number,
+      "share_likelihood_score": number,
+      "viewer_role_strength_score": number,
+      "freshness_score": number,
+      "cooked_score": number,
+      "ethical_risk_score": number,
+      "virality_capability_score": number
+    }
+  }
+}
+
+Return STRICT JSON only. No prose outside the JSON object. No markdown fences. No commentary.
+"""
+
+
+def _assemble_bank_extract_prompt() -> str:
+    return _BASE_BANK_EXTRACT_PROMPT + render_story_flows_for_prompt() + _BANK_EXTRACT_TAIL
+
+
+BANK_EXTRACT_SYSTEM_PROMPT = _assemble_bank_extract_prompt()
+
+
+def build_bank_extract_user_prompt(
+    metadata: dict[str, Any],
+    pass1_result: dict[str, Any],
+    taste_profile: str | None = None,
+) -> str:
+    """User message for the bank extraction call. Embeds Pass 1 as
+    the ground-truth evidence layer plus minimal metadata. Taste
+    profile is optional and kept short."""
+    creator = metadata.get("creator_username") or "(unknown)"
+    nickname = metadata.get("creator_nickname")
+    platform = metadata.get("platform") or "seed_clip"
+    caption = (metadata.get("caption") or "").strip().replace("\n", " ")
+    raw_meta = (metadata.get("raw_analysis") or {}).get("source_metadata") if isinstance(metadata.get("raw_analysis"), dict) else None
+    source_filename = None
+    if isinstance(raw_meta, dict):
+        source_filename = raw_meta.get("source_filename")
+
+    creator_line = f"@{creator}" + (f" ({nickname})" if nickname else "")
+    caption_line = caption or "(none)"
+
+    pass1_json = json.dumps(pass1_result or {}, indent=2, ensure_ascii=False)
+
+    parts: list[str] = []
+    parts.append("PASS 1 EVIDENCE (visual ground truth — do NOT contradict):")
+    parts.append("```json")
+    parts.append(pass1_json)
+    parts.append("```")
+    parts.append("")
+    parts.append("SOURCE CONTEXT (weak prior):")
+    parts.append(f"- platform:        {platform}")
+    parts.append(f"- creator:         {creator_line}")
+    parts.append(f"- caption:         \"{caption_line}\"")
+    if source_filename:
+        parts.append(f"- source_filename: {source_filename}")
+        parts.append("- known_viral:     true (curated seed clip)")
+        parts.append("- analytics:       unavailable (treat as confirmed positive)")
+    if taste_profile and taste_profile.strip():
+        parts.append("")
+        parts.append("USER TASTE PROFILE (soft guide; bias toward 'liked' patterns):")
+        parts.append(taste_profile.strip())
+    parts.append("")
+    parts.append(
+        "Produce the compact bank_concept JSON per the system instructions. "
+        "Be concise. No variations, no pioneer concepts, no specific scenes. "
+        "Output STRICT JSON only."
+    )
+    return "\n".join(parts)
+
+
+def extract_bank_concept(
+    metadata: dict[str, Any],
+    pass1_result: dict[str, Any],
+    provider: VisionProvider,
+    taste_profile: str | None = None,
+    repair_provider: VisionProvider | None = None,
+    debug_save_path: Path | None = None,
+) -> dict[str, Any]:
+    """Run the bank extraction. Text-only call. Returns the parsed dict
+    (top-level key is 'bank_concept')."""
+    user_prompt = build_bank_extract_user_prompt(metadata, pass1_result, taste_profile)
+    raw = provider.analyze_text(BANK_EXTRACT_SYSTEM_PROMPT, user_prompt)
+    try:
+        return _parse_or_repair(raw, repair_provider or provider)
+    except ValueError as e:
+        hint = _save_raw_on_parse_failure(raw, debug_save_path)
+        raise ValueError(f"Bank extract JSON parse failed: {e}{hint}") from e
+
+
+def analyze_bank_only(
+    contact_sheet_path: Path,
+    metadata: dict[str, Any],
+    vision_provider: VisionProvider,
+    strategy_provider: VisionProvider | None = None,
+    taste_profile: str | None = None,
+    debug_pass1_path: Path | None = None,
+    debug_bank_path: Path | None = None,
+) -> tuple[dict[str, Any], dict[str, Any]]:
+    """Pass 1 -> bank extract. Returns (pass1_result, bank_result).
+    bank_result is wrapped {'bank_concept': {...}}.
+
+    Used for the layby workflow on curated seed clips: cheaper and
+    more reliable than the full Pass 2 / Pass 3 pipeline, with
+    enough structure that `analyze-report` can later upgrade the
+    saved Pass 1 to full creative output without re-running Pass 1."""
+    sp = strategy_provider or vision_provider
+    pass1 = extract_visual_event(
+        contact_sheet_path, metadata, vision_provider, repair_provider=sp,
+        debug_save_path=debug_pass1_path,
+    )
+    bank = extract_bank_concept(
+        metadata, pass1, sp, taste_profile=taste_profile, repair_provider=sp,
+        debug_save_path=debug_bank_path,
+    )
+    return pass1, bank
+
+
+def _bank_concept(bank_result: dict[str, Any] | None) -> dict[str, Any]:
+    if not isinstance(bank_result, dict):
+        return {}
+    inner = bank_result.get("bank_concept")
+    return inner if isinstance(inner, dict) else {}
+
+
+def build_bank_only_analysis_result(
+    pass1: dict[str, Any],
+    bank_result: dict[str, Any],
+) -> AnalysisResult:
+    """Project the bank_concept into the top-level report fields and
+    pack both passes verbatim into raw_analysis (analysis_mode='bank_only').
+
+    Top-level field mapping:
+      visual_hook_summary    <- bank.visual_hook_summary
+      onscreen_text          <- pass1.onscreen_text
+      emotional_mechanic     <- bank.viral_mechanic (alias for the legacy column)
+      viewer_role            <- bank.viewer_role
+      emotions_triggered     <- bank.emotions_triggered
+      freshness_score        <- bank.scores.freshness_score
+      cooked_score           <- bank.scores.cooked_score
+      overall_opportunity_score <- bank.scores.virality_capability_score
+      hook_mutations         <- []  (intentionally empty in bank mode)
+    """
+    pass1 = pass1 or {}
+    bank = _bank_concept(bank_result)
+    scores = bank.get("scores") if isinstance(bank.get("scores"), dict) else {}
+
+    return AnalysisResult(
+        visual_hook_summary=_coerce_str_or_none(bank.get("visual_hook_summary")),
+        onscreen_text=_coerce_str_or_none(pass1.get("onscreen_text")),
+        emotional_mechanic=_coerce_str_or_none(bank.get("viral_mechanic")),
+        viewer_role=_coerce_str_or_none(bank.get("viewer_role")),
+        emotions_triggered=_coerce_str_list(bank.get("emotions_triggered")),
+        product_attachability_score=None,
+        transferability_score=None,
+        freshness_score=_coerce_score(scores.get("freshness_score")),
+        cooked_score=_coerce_score(scores.get("cooked_score")),
+        overall_opportunity_score=_coerce_score(scores.get("virality_capability_score")),
+        hook_mutations=[],
+        raw_analysis={
+            "analysis_mode": "bank_only",
+            "visual_event_pass": pass1,
+            "bank_concept": bank,
+        },
+    )
+
+
 def build_three_pass_analysis_result(
     pass1: dict[str, Any],
     pass2: dict[str, Any],
